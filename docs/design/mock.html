@@ -1,0 +1,153 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ShadowBoost mock</title>
+<style>
+/* Tokens: these values are the source for src/ShadowBoost.App/Themes/{Light,Dark}.xaml */
+:root{
+  --font:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  --bg:#F3F3F3; --surface:#FBFBFB; --surface-2:#F9F9F9; --stroke:#E5E5E5; --stroke-strong:#D1D1D1;
+  --text:#1B1B1B; --text-2:#5F5F5F; --text-3:#8A8A8A;
+  --accent:#005FB8; --accent-text:#FFFFFF; --accent-soft:#E5F0FA;
+  --seg-bg:#EDEDED; --seg-sel:#FFFFFF;
+  --day:#F2D27A; --evening:#E9A36C; --night:#7C86B8;
+  --switch-off:#8A8A8A;
+  --shadow:0 8px 24px rgba(0,0,0,.14);
+}
+.dark{
+  --bg:#202020; --surface:#2B2B2B; --surface-2:#272727; --stroke:#3A3A3A; --stroke-strong:#4A4A4A;
+  --text:#FFFFFF; --text-2:#C5C5C5; --text-3:#9A9A9A;
+  --accent:#60CDFF; --accent-text:#003049; --accent-soft:#1F3A4B;
+  --seg-bg:#1F1F1F; --seg-sel:#3A3A3A;
+  --day:#C9A94F; --evening:#C47C4A; --night:#5A63A0;
+  --switch-off:#9A9A9A;
+  --shadow:0 8px 24px rgba(0,0,0,.45);
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:var(--font);background:var(--bg);color:var(--text);padding:32px;font-size:14px}
+.stage{display:grid;grid-template-columns:340px 340px 460px;gap:40px;align-items:start}
+.caption{font-size:12px;color:var(--text-3);margin:0 0 10px}
+.flyout{background:var(--surface);border:1px solid var(--stroke);border-radius:8px;box-shadow:var(--shadow);width:340px}
+.fly-head{display:flex;align-items:center;gap:10px;padding:16px 16px 0}
+.fly-head .name{font-weight:600;font-size:14px;flex:1}
+.glyph{width:18px;height:18px}
+.big{font-size:28px;font-weight:600;line-height:36px;padding:14px 16px 0;letter-spacing:-.2px}
+.big.off{color:var(--text-2)}
+.sub{color:var(--text-2);font-size:13px;line-height:20px;padding:2px 16px 0}
+.seg{display:flex;background:var(--seg-bg);border-radius:6px;padding:3px;margin:16px 16px 0;border:1px solid var(--stroke)}
+.seg span{flex:1;text-align:center;padding:6px 0;border-radius:4px;font-size:13px;color:var(--text-2)}
+.seg span.sel{background:var(--accent);color:var(--accent-text);font-weight:600}
+.seg.small{margin:0;width:240px}
+.seg.small span{padding:4px 0;font-size:12px}
+.link{color:var(--accent);font-size:13px}
+.fly-foot{display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--stroke);margin-top:16px;padding:12px 16px;background:var(--surface-2);border-radius:0 0 8px 8px}
+.kbd{font-size:12px;color:var(--text-3)}
+.switch{width:40px;height:20px;border-radius:10px;border:1px solid var(--switch-off);position:relative;flex:none}
+.switch::after{content:"";position:absolute;width:12px;height:12px;border-radius:6px;background:var(--switch-off);top:3px;left:4px}
+.switch.on{background:var(--accent);border-color:var(--accent)}
+.switch.on::after{background:var(--accent-text);left:23px}
+.hold{padding:10px 16px 0;font-size:13px;color:var(--text-2);display:flex;justify-content:space-between}
+/* main window */
+.win{background:var(--bg);border:1px solid var(--stroke-strong);border-radius:8px;box-shadow:var(--shadow);width:460px;overflow:hidden}
+.titlebar{height:32px;display:flex;align-items:center;justify-content:flex-end;padding:0 4px;color:var(--text-2);font-size:12px;gap:22px;padding-right:16px}
+.page{padding:4px 28px 24px}
+.page-head{display:flex;align-items:center;justify-content:space-between}
+.page-head h1{font-size:28px;font-weight:600;margin:0;letter-spacing:-.2px}
+.state{color:var(--text-2);font-size:13px;margin-top:2px}
+.section{margin-top:26px}
+.label{font-size:13px;font-weight:600;margin-bottom:10px}
+.bar{display:flex;height:10px;border-radius:5px;overflow:hidden;position:relative}
+.bar i{display:block;height:100%}
+.now{position:absolute;top:-4px;width:2px;height:18px;background:var(--text);border-radius:1px}
+.ticks{display:flex;justify-content:space-between;font-size:12px;color:var(--text-3);margin-top:6px}
+.row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-top:1px solid var(--stroke);gap:12px}
+.row:first-of-type{border-top:0}
+.row .t{font-size:14px}
+.row .d{font-size:12px;color:var(--text-3);margin-top:1px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:4px;margin-right:8px;vertical-align:1px}
+.time{border:1px solid var(--stroke-strong);border-bottom-color:var(--text-3);border-radius:4px;padding:1px 6px;background:var(--surface);font-size:12px}
+.chev{color:var(--text-3)}
+/* tray */
+.tray{display:flex;gap:18px;align-items:center;padding:10px 14px;background:var(--surface-2);border:1px solid var(--stroke);border-radius:6px;width:340px}
+.tray .lbl{font-size:12px;color:var(--text-3)}
+.menu{margin-top:12px;background:var(--surface);border:1px solid var(--stroke);border-radius:8px;box-shadow:var(--shadow);width:220px;padding:4px}
+.menu div{padding:7px 12px;border-radius:4px;font-size:13px;display:flex;gap:10px}
+.menu div.check::before{content:"•";color:var(--accent);width:8px}
+.menu div.nocheck::before{content:"";width:8px}
+.menu hr{border:0;border-top:1px solid var(--stroke);margin:4px 0}
+.tip{margin-top:12px;display:inline-block;background:var(--surface);border:1px solid var(--stroke);border-radius:4px;padding:5px 8px;font-size:12px;box-shadow:var(--shadow)}
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <!-- Contrast glyph: circle, left half filled when ON; ring only when OFF -->
+  <symbol id="g-on" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.75a6.25 6.25 0 0 0 0 12.5z" fill="currentColor"/><circle cx="8" cy="8" r="2.4" fill="currentColor"/></symbol>
+  <symbol id="g-off" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+</svg>
+<div class="stage">
+  <div>
+    <p class="caption">Tray flyout, left click. Boost off (every start and after a reboot)</p>
+    <div class="flyout">
+      <div class="fly-head"><svg class="glyph" style="color:var(--text-2)"><use href="#g-off"/></svg><span class="name">ShadowBoost</span><span class="switch"></span></div>
+      <div class="big off">Off</div>
+      <div class="sub">Your screen is normal. Turn it on to follow the schedule, or pick a level.</div>
+      <div class="seg"><span>Gentle</span><span>Balanced</span><span>Strong</span></div>
+      <div class="fly-foot"><span class="link">Schedule and settings</span><span class="kbd">Ctrl+Shift+D</span></div>
+    </div>
+    <p class="caption" style="margin-top:28px">Boost on, following the schedule</p>
+    <div class="flyout">
+      <div class="fly-head"><svg class="glyph" style="color:var(--accent)"><use href="#g-on"/></svg><span class="name">ShadowBoost</span><span class="switch on"></span></div>
+      <div class="big">Balanced</div>
+      <div class="sub">Evening level. Gentle from 10:30 PM.</div>
+      <div class="seg"><span>Gentle</span><span class="sel">Balanced</span><span>Strong</span></div>
+      <div class="fly-foot"><span class="link">Schedule and settings</span><span class="kbd">Ctrl+Shift+D</span></div>
+    </div>
+  </div>
+  <div>
+    <p class="caption">Boost on, level picked by hand</p>
+    <div class="flyout">
+      <div class="fly-head"><svg class="glyph" style="color:var(--accent)"><use href="#g-on"/></svg><span class="name">ShadowBoost</span><span class="switch on"></span></div>
+      <div class="big">Strong</div>
+      <div class="sub">Held until 10:30 PM, then Night uses Gentle.</div>
+      <div class="seg"><span>Gentle</span><span>Balanced</span><span class="sel">Strong</span></div>
+      <div class="hold"><span></span><span class="link">Back to schedule</span></div>
+      <div class="fly-foot"><span class="link">Schedule and settings</span><span class="kbd">Ctrl+Shift+D</span></div>
+    </div>
+    <p class="caption" style="margin-top:28px">Tray icon, pinned. Off is a plain ring, on is filled</p>
+    <div class="tray">
+      <span class="lbl">Off</span><svg width="16" height="16" style="color:var(--text)"><use href="#g-off"/></svg>
+      <span class="lbl">On</span><svg width="16" height="16" style="color:var(--text)"><use href="#g-on"/></svg>
+      <span class="lbl" style="margin-left:auto">monochrome, follows taskbar theme</span>
+    </div>
+    <div class="tip">ShadowBoost: Off</div>
+    <div class="menu">
+      <div class="nocheck">Turn on</div><hr>
+      <div class="nocheck">Gentle</div><div class="nocheck">Balanced</div><div class="nocheck">Strong</div><hr>
+      <div class="nocheck">Schedule and settings</div><div class="nocheck">Quit ShadowBoost</div>
+    </div>
+  </div>
+  <div>
+    <p class="caption">Main window. One header, rows straight on the surface</p>
+    <div class="win">
+      <div class="titlebar"><span>&#8212;</span><span>&#10005;</span></div>
+      <div class="page">
+        <div class="page-head"><div><h1>ShadowBoost</h1><div class="state">On &middot; Evening &middot; Balanced</div></div><span class="switch on"></span></div>
+        <div class="section">
+          <div class="label">Today in New York</div>
+          <div class="bar"><i style="width:29.9%;background:var(--night)"></i><i style="width:46.7%;background:var(--day)"></i><i style="width:17%;background:var(--evening)"></i><i style="width:6.4%;background:var(--night)"></i><span class="now" style="left:79%"></span></div>
+          <div class="ticks"><span>12 AM</span><span>Sunrise 7:11 AM</span><span>Sunset 6:22 PM</span><span>10:30 PM</span></div>
+        </div>
+        <div class="section">
+          <div class="label">Levels</div>
+          <div class="row"><div><div class="t"><span class="dot" style="background:var(--day)"></span>Day</div><div class="d">Sunrise to sunset</div></div><div class="seg small"><span>Gentle</span><span>Balanced</span><span class="sel">Strong</span></div></div>
+          <div class="row"><div><div class="t"><span class="dot" style="background:var(--evening)"></span>Evening</div><div class="d">Sunset to night</div></div><div class="seg small"><span>Gentle</span><span class="sel">Balanced</span><span>Strong</span></div></div>
+          <div class="row"><div><div class="t"><span class="dot" style="background:var(--night)"></span>Night</div><div class="d">From <span class="time">10:30 PM</span> to sunrise</div></div><div class="seg small"><span class="sel">Gentle</span><span>Balanced</span><span>Strong</span></div></div>
+        </div>
+        <div class="section">
+          <div class="label">General</div>
+          <div class="row"><div><div class="t">Location</div><div class="d">New York &middot; 40.71, &minus;74.01</div></div><span class="link">Change</span></div>
+          <div class="row"><div><div class="t">Start at sign-in</div><div class="d">Boost is always off when Windows starts</div></div><span class="switch on"></span></div>
+          <div class="row"><div><div class="t">Fine-tune levels</div><div class="d">Black lift, gamma, contrast, brightness, monitor brightness</div></div><span class="chev">&#8250;</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body></html>
