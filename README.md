@@ -1,58 +1,49 @@
 # ShadowBoost
 
-A lightweight Windows utility to enhance visibility in dark games by adjusting gamma, black levels, and contrast in real-time.
+A Windows 11 tray app that gently lifts dark detail on every attached display.
+Boost is **off on every start**, including sign-in. Ctrl+Shift+D toggles it; click
+the tray ring for the flyout, or right-click for levels, settings and Quit.
 
-![Windows](https://img.shields.io/badge/platform-Windows-blue)
+Gentle, Balanced and Strong use editable black lift, gamma, contrast and
+brightness curves. The schedule follows local sunrise/sunset (New York by
+default), or fixed Day/Evening times, with an editable Night start. Picking a
+level holds it until the next boundary; Back to schedule clears the hold.
+Settings include sign-in startup and optional DDC/CI monitor brightness.
+The UI and monochrome tray glyph follow Windows light/dark themes live.
 
-## Features
+## Build
 
-- **Black Lift** - Raises black levels to reveal hidden shadows
-- **Gamma Adjustment** - Brighten or darken shadow areas
-- **Contrast Control** - Adjust difference between dark and light
-- **Brightness** - Overall screen brightness adjustment
-- **Hardware DDC/CI** - Direct monitor brightness control (if supported)
-- **Presets** - Balanced, Aggressive, and Subtle presets
-- **Hotkey** - Toggle with `Ctrl+Shift+D`
-- **System Tray** - Runs minimized in the background
-- **Start with Windows** - Optional auto-start on boot
+Requires .NET 8 SDK on Windows:
 
-## Download
-
-Download the latest `ShadowBoost.exe` from the [Releases](../../releases) page.
-
-## Usage
-
-1. Run `ShadowBoost.exe`
-2. Adjust sliders to your preference or click a preset button
-3. Use `Ctrl+Shift+D` to quickly toggle the effect on/off
-4. Close the window to minimize to system tray
-
-## Recommended Settings
-
-| Preset | Black Lift | Gamma | Contrast | Brightness | Use Case |
-|--------|------------|-------|----------|------------|----------|
-| **Balanced** | 10% | 0.70 | 105% | 100% | Good visibility without looking washed out |
-| **Aggressive** | 18% | 0.55 | 115% | 105% | Maximum visibility in very dark games |
-| **Subtle** | 4% | 0.82 | 100% | 100% | Minor enhancement |
-
-## Building from Source
-
-Requires .NET Framework 4.0+
-
-```cmd
-csc /target:winexe /out:ShadowBoost.exe ShadowBoost.cs
+```powershell
+dotnet test ShadowBoost.sln -c Release
+dotnet publish src/ShadowBoost.App/ShadowBoost.App.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o out
 ```
 
-## How It Works
+From Studio, `scripts/pc-check.sh all && scripts/pc-e2e.sh` builds/tests on ssh
+host `pc` and exercises an isolated, hidden, dry-gamma instance. It does not
+change the installed app, gamma, sign-in registration or tray promotion.
 
-ShadowBoost uses the Windows GDI `SetDeviceGammaRamp` API to adjust the display's gamma lookup table. This affects all colors displayed on screen, making dark areas more visible without modifying game files.
+## Commands
 
-The processing order is:
-1. **Black Lift** - Raises the floor for dark pixels
-2. **Gamma** - Applies power curve (lower = brighter shadows)
-3. **Contrast** - Adjusts around midpoint
-4. **Brightness** - Final multiplier
+`ShadowBoost.exe --tray` starts hidden (the sign-in command). `--show` opens
+schedule/settings; `--flyout` toggles the flyout. `--on`, `--off`,
+`--level gentle|balanced|strong`, `--schedule` and `--quit` control the running
+instance. A second launch forwards commands through a per-user/data-dir pipe.
 
-## License
+`--home <directory>` isolates settings and status. `--dry-gamma` is a startup
+flag that computes ramps but makes no gamma or monitor-brightness writes.
+Either isolation flag suppresses Run/tray-pinning writes. For checks, always
+use both and `--tray`, never `--show` or `--flyout`.
 
-MIT License - feel free to use and modify.
+`--screenshot <directory>` renders hidden 2x light/dark flyout, main and
+fine-tune views, additional off/scheduled flyouts, and 32px on/off tray glyphs
+(14 PNGs), without opening a window.
+
+Settings live in `%APPDATA%\ShadowBoost\settings.json`; status is atomically
+written to `%LOCALAPPDATA%\ShadowBoost\status.json`. With `--home`, both are in
+that directory. Existing `%APPDATA%\ShadowBoost.txt` is imported on first run
+only without `--home`. External settings edits reload after a short debounce.
+Gamma resets to identity at startup and exit; games resetting ramps and
+resume/display/time changes trigger reapplication while enabled. Saved
+monitor brightness is never applied at startup.

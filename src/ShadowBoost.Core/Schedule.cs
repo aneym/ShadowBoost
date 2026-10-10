@@ -43,6 +43,7 @@ public static class Schedule
 
     private static (DateTimeOffset Sunrise, DateTimeOffset Sunset) Solar(DateOnly date, Settings s, TimeZoneInfo tz)
     {
+        if (!s.FollowSun) return (Local(date, s.DayStart, tz), Local(date, s.EveningStart, tz));
         var (rise, set) = SunTimes.For(date, s.Latitude, s.Longitude, tz);
         return (rise ?? Local(date, new(7, 0), tz), set ?? Local(date, new(19, 0), tz));
     }

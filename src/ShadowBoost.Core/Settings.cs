@@ -13,6 +13,9 @@ public sealed class Settings
     public double Latitude { get; set; } = 40.7128;
     public double Longitude { get; set; } = -74.0060;
     public string PlaceName { get; set; } = "New York";
+    public bool FollowSun { get; set; } = true;
+    public TimeOnly DayStart { get; set; } = new(7, 0);
+    public TimeOnly EveningStart { get; set; } = new(19, 0);
     public TimeOnly NightStart { get; set; } = new(22, 30);
     public Dictionary<Period, LevelId> PeriodLevels { get; set; } = new()
     {

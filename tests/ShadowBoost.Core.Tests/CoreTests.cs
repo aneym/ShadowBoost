@@ -59,17 +59,21 @@ public sealed class CoreTests
     [InlineData(3, 0, 22, 30, Period.Night, 21, 5, 25)]
     [InlineData(23, 30, 1, 0, Period.Evening, 22, 1, 0)]
     [InlineData(20, 45, 18, 0, Period.Night, 22, 5, 25)]
+    [InlineData(7, 0, 22, 30, Period.Day, 21, 19, 0, false)]
+    [InlineData(18, 59, 22, 30, Period.Day, 21, 19, 0, false)]
+    [InlineData(19, 0, 22, 30, Period.Evening, 21, 22, 30, false)]
+    [InlineData(22, 30, 22, 30, Period.Night, 22, 7, 0, false)]
     public void ScheduleSelectsSlot(int hour, int minute, int nightHour, int nightMinute,
-        Period period, int endDay, int endHour, int endMinute)
+        Period period, int endDay, int endHour, int endMinute, bool followSun = true)
     {
-        var settings = new Settings { NightStart = new(nightHour, nightMinute) };
+        var settings = new Settings { NightStart = new(nightHour, nightMinute), FollowSun = followSun };
         var now = June(hour, minute);
         var slot = Schedule.At(now, settings, Ny);
         Assert.Equal(period, slot.Period);
         Assert.Equal(settings.PeriodLevels[period], slot.Level);
         Assert.True(slot.Start <= now && now < slot.End);
         var expected = new DateTimeOffset(2026, 6, endDay, endHour, endMinute, 0, TimeSpan.FromHours(-4));
-        Assert.InRange(Math.Abs((slot.End - expected).TotalMinutes), 0, period == Period.Evening ? 0 : 3);
+        Assert.InRange(Math.Abs((slot.End - expected).TotalMinutes), 0, !followSun || period == Period.Evening ? 0 : 3);
     }
 
     // Guards a clipped, gap-free timeline including 23/25-hour DST days and polar fallback.

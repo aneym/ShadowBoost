@@ -1,0 +1,19 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <SolidColorBrush x:Key="Bg" Color="#F3F3F3"/>
+  <SolidColorBrush x:Key="Surface" Color="#FBFBFB"/>
+  <SolidColorBrush x:Key="Surface2" Color="#F9F9F9"/>
+  <SolidColorBrush x:Key="Stroke" Color="#E5E5E5"/>
+  <SolidColorBrush x:Key="StrokeStrong" Color="#D1D1D1"/>
+  <SolidColorBrush x:Key="Text" Color="#1B1B1B"/>
+  <SolidColorBrush x:Key="Text2" Color="#5F5F5F"/>
+  <SolidColorBrush x:Key="Text3" Color="#8A8A8A"/>
+  <SolidColorBrush x:Key="Accent" Color="#005FB8"/>
+  <SolidColorBrush x:Key="AccentText" Color="#FFFFFF"/>
+  <SolidColorBrush x:Key="AccentSoft" Color="#E5F0FA"/>
+  <SolidColorBrush x:Key="SegBg" Color="#EDEDED"/>
+  <SolidColorBrush x:Key="SegSel" Color="#FFFFFF"/>
+  <SolidColorBrush x:Key="Day" Color="#F2D27A"/>
+  <SolidColorBrush x:Key="Evening" Color="#E9A36C"/>
+  <SolidColorBrush x:Key="Night" Color="#7C86B8"/>
+  <SolidColorBrush x:Key="SwitchOff" Color="#8A8A8A"/>
+</ResourceDictionary>
