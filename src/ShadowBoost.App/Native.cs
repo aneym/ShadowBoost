@@ -55,6 +55,13 @@ internal static class Native
         Displays((dc, primary) => { if (!primary) return; var ramp = new Ramp(new ushort[256]); matches = GetDeviceGammaRamp(dc, ref ramp) && WithinTolerance(ramp.Red, values) && WithinTolerance(ramp.Green, values) && WithinTolerance(ramp.Blue, values); });
         return matches;
     }
+    public static int? RampMid()
+    {
+        int? value = null;
+        Displays((dc, primary) => { if (!primary) return; var ramp = new Ramp(new ushort[256]); if (GetDeviceGammaRamp(dc, ref ramp)) value = ramp.Red[128]; });
+        return value;
+    }
+    [DllImport("kernel32.dll")] internal static extern bool AttachConsole(uint processId);
     static bool WithinTolerance(ushort[] actual, ushort[] expected) =>
         actual.Length == expected.Length && actual.Zip(expected, (a, b) => Math.Abs((int)a - b) <= 512).All(value => value);
 

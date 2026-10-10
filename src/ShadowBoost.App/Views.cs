@@ -70,6 +70,14 @@ public sealed class FlyoutView : UserControl
         body.Children.Add(new Border { Margin = new Thickness(16,2,16,0), Child = UI.Text(copy,13,"Text2") });
         body.Children.Add(new Border { Margin = new Thickness(16,16,16,0), Child = UI.Segments(s.Enabled ? s.ActiveLevel : null, app.Select, ids:true) });
         if (s.IsOverride) { var back = UI.Link("Back to schedule", app.ScheduleAgain); back.HorizontalAlignment = HorizontalAlignment.Right; AutomationProperties.SetAutomationId(back,"BackToSchedule"); body.Children.Add(new Border { Margin = new Thickness(16,10,16,0), Child = back }); }
+        var brightness = new StackPanel { Margin = new Thickness(16,16,16,0) };
+        var heading = new Grid(); heading.ColumnDefinitions.Add(new()); heading.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        heading.Children.Add(UI.Text("Brightness",13,weight:FontWeights.SemiBold));
+        var value = UI.Text(app.Settings.UserBrightness + "%",13,"Text2"); Grid.SetColumn(value,1); heading.Children.Add(value); brightness.Children.Add(heading);
+        var slider = new Slider { Minimum = 50, Maximum = 130, Value = app.Settings.UserBrightness, TickFrequency = 1, IsSnapToTickEnabled = true, Margin = new Thickness(0,8,0,0) };
+        AutomationProperties.SetAutomationId(slider,"BrightnessSlider");
+        slider.ValueChanged += (_,e) => { value.Text = ((int)e.NewValue) + "%"; app.SetUserBrightness((int)e.NewValue); };
+        brightness.Children.Add(slider); body.Children.Add(brightness);
         var foot = new Grid(); foot.ColumnDefinitions.Add(new()); foot.ColumnDefinitions.Add(new() { Width = GridLength.Auto }); foot.Children.Add(UI.Link("Schedule and settings",app.ShowMain)); var key = UI.Text("Ctrl+Shift+D",12,"Text3"); Grid.SetColumn(key,1); foot.Children.Add(key);
         var footer = new Border { Margin = new Thickness(0,16,0,0), Padding = new Thickness(16,12,16,12), BorderThickness = new Thickness(0,1,0,0), CornerRadius = new CornerRadius(0,0,8,8), Child = foot }; footer.SetResourceReference(Border.BackgroundProperty,"Surface2"); footer.SetResourceReference(Border.BorderBrushProperty,"Stroke"); body.Children.Add(footer);
         var shell = new Border { CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), Child = body }; shell.SetResourceReference(Border.BackgroundProperty,"Surface"); shell.SetResourceReference(Border.BorderBrushProperty,"Stroke"); Content = shell;
@@ -98,16 +106,19 @@ public sealed class MainView : UserControl
             var dot = new Ellipse { Width = 8, Height = 8, Margin = new Thickness(0,0,8,0), VerticalAlignment = VerticalAlignment.Center }; dot.SetResourceReference(Shape.FillProperty, period.ToString()); title.Children.Add(dot); title.Children.Add(UI.Text(period.ToString())); left.Children.Add(title);
             if (period == Period.Night)
             {
-                var inline = new WrapPanel(); inline.Children.Add(UI.Text("From ",12,"Text3"));
-                TextBox? clock = null; clock = UI.Field(UI.Clock(settings.NightStart), text => { if (UI.ParseTime(text,out var t)) { settings.NightStart = t; app.Save(); } else clock!.Text = UI.Clock(settings.NightStart); },70); clock.Padding = new Thickness(3,0,3,0); inline.Children.Add(clock); inline.Children.Add(UI.Text(settings.FollowSun ? " to sunrise" : " to " + UI.Clock(settings.DayStart),12,"Text3")); left.Children.Add(inline);
+                var inline = new StackPanel { Orientation = Orientation.Horizontal }; inline.Children.Add(UI.Text("From ",12,"Text3"));
+                TextBox? clock = null; clock = UI.Field(UI.Clock(settings.NightStart), text => { if (UI.ParseTime(text,out var t)) { settings.NightStart = t; app.Save(); } else clock!.Text = UI.Clock(settings.NightStart); },60); clock.Padding = new Thickness(3,0,3,0); clock.VerticalAlignment = VerticalAlignment.Center; inline.Children.Add(clock); inline.Children.Add(UI.Text(settings.FollowSun ? " to sunrise" : " to " + UI.Clock(settings.DayStart),12,"Text3")); left.Children.Add(inline);
             }
             else left.Children.Add(UI.Text(period == Period.Day ? (settings.FollowSun ? "Sunrise to sunset" : $"{UI.Clock(settings.DayStart)} to {UI.Clock(settings.EveningStart)}") : (settings.FollowSun ? "Sunset to night" : $"{UI.Clock(settings.EveningStart)} to night"),12,"Text3"));
-            page.Children.Add(UI.Row(left,UI.Segments(settings.PeriodLevels[period], level => { settings.PeriodLevels[period] = level; app.Save(); },true)));
+            var picker = UI.Segments(settings.PeriodLevels[period], level => { settings.PeriodLevels[period] = level; app.Save(); },true);
+            if (period == Period.Night) picker.Width = 220;
+            page.Children.Add(UI.Row(left,picker));
         }
         UI.Section(page,"General");
         string coordinates = settings.Longitude.ToString("0.00",CultureInfo.InvariantCulture).Replace("-","−");
         page.Children.Add(UI.Row(UI.Caption("Location",$"{settings.PlaceName} · {settings.Latitude:0.00}, {coordinates}"), UI.Link("Change", () => { locationOpen = !locationOpen; Build(); })));
         if (locationOpen) Location(page);
+        page.Children.Add(UI.Row(UI.Caption("Brightness","Your setting from the tray. The schedule never changes it"),UI.Text(settings.UserBrightness + "%",13,"Text2")));
         page.Children.Add(UI.Row(UI.Caption("Start at sign-in","Boost is always off when Windows starts"), UI.Switch(settings.StartAtSignIn, () => { settings.StartAtSignIn = !settings.StartAtSignIn; app.Save(); })));
         page.Children.Add(UI.Row(UI.Caption("Fine-tune levels","Black lift, gamma, contrast, brightness, monitor brightness"), UI.Link("›",app.FineTune)));
         var bg = new Border { Child = page }; bg.SetResourceReference(Border.BackgroundProperty,"Bg"); Content = new ScrollViewer { Content = bg, VerticalScrollBarVisibility = ScrollBarVisibility.Hidden, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
@@ -134,15 +145,34 @@ public sealed class MainView : UserControl
         }
         bool Layout(bool shorten)
         {
-            labels.Children.Clear(); double right = -8;
+            labels.Children.Clear();
+            var measured = new List<(TextBlock Label, double Width)>();
             foreach (var entry in entries)
             {
                 var label = UI.Text(shorten ? entry.Short : entry.Full,12,"Text3");
                 label.TextWrapping = TextWrapping.NoWrap;
                 label.Measure(new Size(double.PositiveInfinity,double.PositiveInfinity));
-                double x = Math.Max(Math.Clamp(entry.X,0,width-label.DesiredSize.Width),right+8);
-                if (x + label.DesiredSize.Width > width) { labels.Children.Clear(); return false; }
-                Canvas.SetLeft(label,x); labels.Children.Add(label); right = x + label.DesiredSize.Width;
+                measured.Add((label,label.DesiredSize.Width));
+            }
+            if (measured.Sum(item => item.Width) + (measured.Count - 1) * 8 > width) return false;
+            var positions = new double[entries.Count];
+            double right = -8;
+            for (int i = 0; i < entries.Count; i++)
+            {
+                positions[i] = Math.Max(Math.Clamp(entries[i].X,0,width-measured[i].Width),right+8);
+                right = positions[i] + measured[i].Width;
+            }
+            // Late-night boundaries can overflow even when the whole row fits.
+            // Back-pack from the right edge before dropping labels or shortening copy.
+            double next = width + 8;
+            for (int i = entries.Count - 1; i >= 0; i--)
+            {
+                positions[i] = Math.Min(positions[i],next-8-measured[i].Width);
+                next = positions[i];
+            }
+            for (int i = 0; i < entries.Count; i++)
+            {
+                Canvas.SetLeft(measured[i].Label,positions[i]); labels.Children.Add(measured[i].Label);
             }
             return true;
         }

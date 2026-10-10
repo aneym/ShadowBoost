@@ -53,7 +53,7 @@ $leg='L1'
 try {
     $now=Get-Date
     $evening=$now.Date.AddHours($now.Hour).AddMinutes($now.Minute+2)
-    $settings=@{followSun=$false;dayStart=$now.AddHours(-2).ToString('HH:mm');eveningStart=$evening.ToString('HH:mm');nightStart=$now.AddHours(3).ToString('HH:mm');periodLevels=@{Day='Strong';Evening='Balanced';Night='Gentle'}}
+    $settings=@{followSun=$false;dayStart=$now.AddHours(-2).ToString('HH:mm');eveningStart=$evening.ToString('HH:mm');nightStart=$now.AddHours(3).ToString('HH:mm');userBrightness=85;periodLevels=@{Day='Strong';Evening='Balanced';Night='Gentle'}}
     $settings | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $homeDir 'settings.json') -Encoding UTF8
     $s=Start-App
     Write-Output ('Launch path: '+$launchMode)
@@ -70,15 +70,52 @@ try {
     if ($shots.Count -ne 14 -or @($shots | Where-Object Length -eq 0).Count) { throw "expected 14 nonempty PNGs, got $($shots.Count)" }
     Write-Output 'PASS L4 screenshots: 14 nonempty PNGs'
     Write-Output ('SHOTS='+$homeDir.Replace('\','/')+'/shots')
+    $leg='L4b'
+    $fixedHome=$homeDir; $fixedStatus=$statusFile; $fixedPid=$ownedPid
+    try {
+        $homeDir=Join-Path $env:TEMP ('sb-sun-e2e-'+[guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory $homeDir | Out-Null
+        $statusFile=Join-Path $homeDir 'status.json'
+        @{followSun=$true;placeName='New York';latitude=40.7128;longitude=-74.0060} | ConvertTo-Json | Set-Content (Join-Path $homeDir 'settings.json') -Encoding UTF8
+        $s=Start-App; $ownedPid=[int]$s.pid
+        if ($s.enabled -or -not $s.dryGamma -or $s.dataDir -ne $homeDir) { throw 'solar instance not isolated/off/dry' }
+        Command @('--screenshot',('"'+(Join-Path $homeDir 'shots')+'"'))
+        $shotDeadline=(Get-Date).AddSeconds(20)
+        do { $shots=@(Get-ChildItem (Join-Path $homeDir 'shots') -Filter '*.png' -ErrorAction SilentlyContinue); if ($shots.Count -eq 14) { break }; Start-Sleep -Milliseconds 300 } while ((Get-Date) -lt $shotDeadline)
+        if ($shots.Count -ne 14 -or @($shots | Where-Object Length -eq 0).Count) { throw 'solar screenshots incomplete' }
+        Write-Output ('Solar launch path: '+$launchMode)
+        Write-Output 'PASS L4b solar screenshots: isolated New York, 14 nonempty PNGs'
+        Write-Output ('SUNSHOTS='+$homeDir.Replace('\','/')+'/shots')
+    } finally {
+        Cleanup
+        $homeDir=$fixedHome; $statusFile=$fixedStatus; $ownedPid=$fixedPid
+    }
     $leg='L5'; $deadline=$evening.AddSeconds(25)
     while ((Get-Date) -lt $deadline) { $s=Status; Start-Sleep -Seconds ([Math]::Min(10,[Math]::Max(1,($deadline-(Get-Date)).TotalSeconds))) }
     $s=Status
     if ($s.period -ne 'Evening' -or $s.activeLevel -ne 'Balanced' -or $s.isOverride) { throw 'schedule did not take over at evening boundary' }
+    if ($s.userBrightness -ne 85) { throw 'boundary changed user brightness' }
     Write-Output 'PASS L5 boundary: Evening, Balanced, override cleared'
     $leg='L6'; Command @('--off'); $s=Wait-State { param($s) -not $s.enabled }; Write-Output 'PASS L6 off: disabled'
     $leg='L7'; Cleanup; $s=Start-App; if ($s -is [array]) { $s=$s[-1] }; $ownedPid=[int]$s.pid
     if ($s.enabled) { throw 'restart enabled' }
     Write-Output 'PASS L7 restart: disabled'; Cleanup
+    $leg='L8'
+    $p=Start-Process -FilePath $exe -ArgumentList @('--home',('"'+$homeDir+'"'),'--dry-gamma','--off') -PassThru
+    if (-not $p.WaitForExit(10000)) { Stop-Process -Id $p.Id; throw 'orphan command stayed alive' }
+    if ($p.ExitCode -ne 3) { throw "orphan command exit $($p.ExitCode), expected 3" }
+    $processes=@(Get-CimInstance Win32_Process -Filter "Name='ShadowBoost.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($homeDir) })
+    if ($processes.Count) { throw 'orphan command started a primary' }
+    Write-Output 'PASS L8 orphan off: exit 3, no primary process'
+    $leg='L9'; $s=Start-App; $ownedPid=[int]$s.pid; Command @('--off')
+    $s=Wait-State { param($s) -not $s.enabled }
+    $processes=@(Get-CimInstance Win32_Process -Filter "Name='ShadowBoost.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($homeDir) })
+    if ($processes.Count -ne 1 -or $processes[0].ProcessId -ne $ownedPid) { throw 'second off created another primary' }
+    Write-Output 'PASS L9 second off: exactly one isolated primary'
+    $leg='L10'
+    if ($s.userBrightness -ne 85 -or $s.enabled) { throw 'brightness did not survive disabled restart' }
+    Write-Output 'PASS L10 brightness: 85 persisted through boundary and disabled restart'
+    Cleanup
 } catch { Write-Output "FAIL $leg`: $($_.Exception.Message)"; exit 1 }
 finally { Cleanup }
 PS
@@ -90,3 +127,8 @@ shots="$(sed -n 's/^SHOTS=//p' "$tmp/result" | tr -d '\r')"
 mkdir -p "$root/out/shots"
 scp -q "pc:$shots/*.png" "$root/out/shots/"
 echo "Screenshots copied to $root/out/shots/"
+sunshots="$(sed -n 's/^SUNSHOTS=//p' "$tmp/result" | tr -d '\r')"
+[[ -n "$sunshots" ]]
+mkdir -p "$root/out/shots-sun"
+scp -q "pc:$sunshots/*.png" "$root/out/shots-sun/"
+echo "Solar screenshots copied to $root/out/shots-sun/"

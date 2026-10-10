@@ -115,6 +115,23 @@ public sealed class CoreTests
         if (nightHour == 18) Assert.DoesNotContain(slots, slot => slot.Period == Period.Evening);
     }
 
+    // Guards independent brightness composition without changing boost scheduling.
+    [Theory]
+    [InlineData(false, 100)]
+    [InlineData(false, 80)]
+    [InlineData(true, 100)]
+    public void ComposeBrightness(bool boosted, int brightness)
+    {
+        Curve? curve = boosted ? new Settings().Curves[LevelId.Balanced] : null;
+        var ramp = GammaRamp.Compose(curve, brightness);
+        if (brightness == 100) Assert.Equal(curve == null ? GammaRamp.Identity() : GammaRamp.Build(curve), ramp);
+        else
+        {
+            Assert.InRange((int)ramp[255], 52427, 52429);
+            for (int i = 1; i < ramp.Length; i++) Assert.True(ramp[i] >= ramp[i - 1]);
+        }
+    }
+
     // Guards disabled startup, scheduled activation, override expiry, and one-shot boundary reporting.
     [Fact]
     public void EngineLifecycle()

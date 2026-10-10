@@ -18,5 +18,12 @@ public static class GammaRamp
         return ramp;
     }
 
+    public static ushort[] Compose(Curve? boost, int userBrightness)
+    {
+        var ramp = boost == null ? Identity() : Build(boost);
+        if (userBrightness == 100) return ramp;
+        return ramp.Select(value => (ushort)Math.Clamp(value * Math.Clamp(userBrightness, 50, 130) / 100.0, 0, 65535)).ToArray();
+    }
+
     public static ushort[] Identity() => Enumerable.Range(0, 256).Select(i => (ushort)(i * 257)).ToArray();
 }

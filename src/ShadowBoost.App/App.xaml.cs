@@ -36,7 +36,8 @@ public partial class App : Application
     ushort[] expected = GammaRamp.Identity();
     string rampCheck = "identity";
     DateTimeOffset pinDeadline;
-    bool quitting, wasEnabled;
+    bool quitting;
+    DispatcherTimer? brightnessDebounce;
     static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
 
     protected override void OnStartup(StartupEventArgs e)
@@ -48,12 +49,19 @@ public partial class App : Application
         settingsPath = Path.Combine(dataDir, "settings.json");
         statusPath = Path.Combine(home == null ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ShadowBoost") : dataDir, "status.json");
         pipeName = "ShadowBoost-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(dataDir.ToUpperInvariant() + Environment.UserName)))[..16];
-        mutex = new Mutex(true, "Local\\" + pipeName, out bool first);
+        mutex = new Mutex(true, "Global\\" + pipeName, out bool first);
         if (!first)
         {
             try { using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out); client.Connect(5000); using var writer = new StreamWriter(client); writer.WriteLine(JsonSerializer.Serialize(e.Args)); }
             catch (Exception ex) { Trace.WriteLine(ex); Environment.ExitCode = 1; }
             Shutdown(); return;
+        }
+        string[] commands = { "--on", "--off", "--level", "--schedule", "--show", "--flyout", "--quit", "--screenshot" };
+        if (e.Args.Any(commands.Contains))
+        {
+            Native.AttachConsole(uint.MaxValue);
+            Console.WriteLine("ShadowBoost is not running");
+            mutex.ReleaseMutex(); mutex.Dispose(); Shutdown(3); return;
         }
         Directory.CreateDirectory(dataDir);
         if (!File.Exists(settingsPath))
@@ -65,6 +73,7 @@ public partial class App : Application
         else Settings = Settings.Load(settingsPath);
         lastSaved = File.ReadAllText(settingsPath);
         Engine = new BoostEngine(Settings, TimeZoneInfo.Local);
+        expected = GammaRamp.Compose(null, Settings.UserBrightness);
         Native.Apply(expected, Dry); rampCheck = Dry ? "dry" : "identity";
         ApplyTheme();
         hotkey = new HwndSource(new HwndSourceParameters(pipeName) { Width = 0, Height = 0, WindowStyle = 0 });
@@ -124,14 +133,24 @@ public partial class App : Application
     internal void Select(LevelId level) { Engine.SetLevel(level, DateTimeOffset.Now); Refresh(true); }
     internal void ScheduleAgain() { Engine.TurnOn(DateTimeOffset.Now); Refresh(true); }
     internal void Save() { Settings.Save(settingsPath); lastSaved = File.ReadAllText(settingsPath); Engine.UpdateSettings(Settings); SyncRun(); Refresh(true); }
+    internal void SetUserBrightness(int value)
+    {
+        Settings.UserBrightness = Math.Clamp(value,50,130);
+        brightnessDebounce ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        brightnessDebounce.Stop();
+        brightnessDebounce.Tick -= ApplyUserBrightness;
+        brightnessDebounce.Tick += ApplyUserBrightness;
+        brightnessDebounce.Start();
+    }
+    void ApplyUserBrightness(object? sender, EventArgs e) { brightnessDebounce!.Stop(); Save(); }
     internal void SetBrightness(int value) { if (!Dry) Native.Brightness(value); Settings.MonitorBrightness = value; Save(); }
     void Refresh(bool apply)
     {
         var state = State;
-        var ramp = state.AppliedCurve == null ? GammaRamp.Identity() : GammaRamp.Build(state.AppliedCurve);
+        var ramp = GammaRamp.Compose(state.AppliedCurve, Settings.UserBrightness);
         bool mismatch = !Dry && !Native.Matches(expected);
-        if (state.Enabled ? (apply || mismatch || !expected.SequenceEqual(ramp)) : wasEnabled) Native.Apply(ramp, Dry);
-        wasEnabled = state.Enabled;
+        bool identity = ramp.SequenceEqual(GammaRamp.Identity());
+        if (!expected.SequenceEqual(ramp) || (!identity && (apply || mismatch))) Native.Apply(ramp, Dry);
         expected = ramp;
         rampCheck = Dry ? "dry" : (!Native.Matches(expected) ? "mismatch" : state.Enabled ? "boost" : "identity");
         UpdateTray(); Changed?.Invoke(); WriteStatus();
@@ -141,7 +160,7 @@ public partial class App : Application
         var state = State;
         Directory.CreateDirectory(Path.GetDirectoryName(statusPath)!);
         string tmp = statusPath + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(new { pid = Environment.ProcessId, exePath = exe, dataDir, updatedAt = DateTimeOffset.Now, dryGamma = Dry, state.Enabled, state.Period, state.ScheduledLevel, state.ActiveLevel, state.IsOverride, state.NextChange, state.AppliedCurve, rampCheck, runKey = RunValue(), trayPinned = PinValue() }, Json));
+        File.WriteAllText(tmp, JsonSerializer.Serialize(new { pid = Environment.ProcessId, exePath = exe, dataDir, updatedAt = DateTimeOffset.Now, dryGamma = Dry, state.Enabled, state.Period, state.ScheduledLevel, state.ActiveLevel, state.IsOverride, state.NextChange, state.AppliedCurve, userBrightness = Settings.UserBrightness, rampMid = Dry ? null : Native.RampMid(), rampCheck, runKey = RunValue(), trayPinned = PinValue() }, Json));
         File.Move(tmp, statusPath, true);
     }
     const string RunPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -216,6 +235,7 @@ public partial class App : Application
     void ProcessExit(object? s, EventArgs e) => Native.Apply(GammaRamp.Identity(), Dry);
     internal void Quit()
     {
+        if (brightnessDebounce?.IsEnabled == true) { brightnessDebounce.Stop(); Save(); }
         quitting = true; timer?.Stop(); stopping.Cancel(); watcher?.Dispose(); debounce?.Stop();
         Native.Apply(GammaRamp.Identity(), Dry);
         Engine.TurnOff(DateTimeOffset.Now); rampCheck = Dry ? "dry" : "identity"; WriteStatus();

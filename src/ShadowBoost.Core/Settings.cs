@@ -28,6 +28,7 @@ public sealed class Settings
         [LevelId.Strong] = new(18, 55, 115, 105)
     };
     public bool StartAtSignIn { get; set; } = true;
+    public int UserBrightness { get; set; } = 100;
     public int? MonitorBrightness { get; set; }
     public bool TrayPinApplied { get; set; }
 
@@ -106,6 +107,7 @@ public sealed class Settings
             Curves[level] = new(Math.Clamp(saved.BlackLift, 0, 30), Math.Clamp(saved.Gamma, 30, 100),
                 Math.Clamp(saved.Contrast, 50, 150), Math.Clamp(saved.Brightness, 50, 130));
         }
+        UserBrightness = Math.Clamp(UserBrightness, 50, 130);
         if (MonitorBrightness.HasValue) MonitorBrightness = Math.Clamp(MonitorBrightness.Value, 0, 100);
     }
 
