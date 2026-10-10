@@ -107,7 +107,7 @@ public sealed class MainView : UserControl
             if (period == Period.Night)
             {
                 var inline = new StackPanel { Orientation = Orientation.Horizontal }; inline.Children.Add(UI.Text("From ",12,"Text3"));
-                TextBox? clock = null; clock = UI.Field(UI.Clock(settings.NightStart), text => { if (UI.ParseTime(text,out var t)) { settings.NightStart = t; app.Save(); } else clock!.Text = UI.Clock(settings.NightStart); },60); clock.Padding = new Thickness(3,0,3,0); clock.VerticalAlignment = VerticalAlignment.Center; inline.Children.Add(clock); inline.Children.Add(UI.Text(settings.FollowSun ? " to sunrise" : " to " + UI.Clock(settings.DayStart),12,"Text3")); left.Children.Add(inline);
+                TextBox? clock = null; clock = UI.Field(UI.Clock(settings.NightStart), text => { if (UI.ParseTime(text,out var t)) { settings.NightStart = t; app.Save(); } else clock!.Text = UI.Clock(settings.NightStart); },78); clock.Padding = new Thickness(3,0,3,0); clock.VerticalAlignment = VerticalAlignment.Center; inline.Children.Add(clock); inline.Children.Add(UI.Text(settings.FollowSun ? " to sunrise" : " to " + UI.Clock(settings.DayStart),12,"Text3")); left.Children.Add(inline);
             }
             else left.Children.Add(UI.Text(period == Period.Day ? (settings.FollowSun ? "Sunrise to sunset" : $"{UI.Clock(settings.DayStart)} to {UI.Clock(settings.EveningStart)}") : (settings.FollowSun ? "Sunset to night" : $"{UI.Clock(settings.EveningStart)} to night"),12,"Text3"));
             var picker = UI.Segments(settings.PeriodLevels[period], level => { settings.PeriodLevels[period] = level; app.Save(); },true);

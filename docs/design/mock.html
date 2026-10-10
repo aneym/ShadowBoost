@@ -74,6 +74,13 @@ body{margin:0;font-family:var(--font);background:var(--bg);color:var(--text);pad
 .menu div.nocheck::before{content:"";width:8px}
 .menu hr{border:0;border-top:1px solid var(--stroke);margin:4px 0}
 .tip{margin-top:12px;display:inline-block;background:var(--surface);border:1px solid var(--stroke);border-radius:4px;padding:5px 8px;font-size:12px;box-shadow:var(--shadow)}
+.bright{padding:16px 16px 0}
+.bright .top{display:flex;justify-content:space-between;font-size:13px;color:var(--text-2);margin-bottom:8px}
+.bright .top b{font-weight:600;color:var(--text)}
+.track{position:relative;height:4px;border-radius:2px;background:var(--stroke-strong)}
+.track .fill{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:var(--accent)}
+.track .thumb{position:absolute;top:-8px;width:20px;height:20px;border-radius:10px;background:var(--surface);border:1px solid var(--stroke-strong);box-shadow:0 1px 2px rgba(0,0,0,.15)}
+.track .thumb::after{content:"";position:absolute;left:5px;top:5px;width:8px;height:8px;border-radius:4px;background:var(--accent)}
 </style></head>
 <body>
 <svg width="0" height="0" style="position:absolute">
@@ -89,7 +96,7 @@ body{margin:0;font-family:var(--font);background:var(--bg);color:var(--text);pad
       <div class="big off">Off</div>
       <div class="sub">Your screen is normal. Turn it on to follow the schedule, or pick a level.</div>
       <div class="seg"><span>Gentle</span><span>Balanced</span><span>Strong</span></div>
-      <div class="fly-foot"><span class="link">Schedule and settings</span><span class="kbd">Ctrl+Shift+D</span></div>
+      <div class="bright"><div class="top"><b>Brightness</b><span>100%</span></div><div class="track"><span class="fill" style="width:62%"></span><span class="thumb" style="left:calc(62% - 10px)"></span></div></div><div class="fly-foot"><span class="link">Schedule and settings</span><span class="kbd">Ctrl+Shift+D</span></div>
     </div>
     <p class="caption" style="margin-top:28px">Boost on, following the schedule</p>
     <div class="flyout">
@@ -97,7 +104,7 @@ body{margin:0;font-family:var(--font);background:var(--bg);color:var(--text);pad
       <div class="big">Balanced</div>
       <div class="sub">Evening level. Gentle from 10:30 PM.</div>
       <div class="seg"><span>Gentle</span><span class="sel">Balanced</span><span>Strong</span></div>
-      <div class="fly-foot"><span class="link">Schedule and settings</span><span class="kbd">Ctrl+Shift+D</span></div>
+      <div class="bright"><div class="top"><b>Brightness</b><span>100%</span></div><div class="track"><span class="fill" style="width:62%"></span><span class="thumb" style="left:calc(62% - 10px)"></span></div></div><div class="fly-foot"><span class="link">Schedule and settings</span><span class="kbd">Ctrl+Shift+D</span></div>
     </div>
   </div>
   <div>
@@ -108,7 +115,7 @@ body{margin:0;font-family:var(--font);background:var(--bg);color:var(--text);pad
       <div class="sub">Held until 10:30 PM, then Night uses Gentle.</div>
       <div class="seg"><span>Gentle</span><span>Balanced</span><span class="sel">Strong</span></div>
       <div class="hold"><span></span><span class="link">Back to schedule</span></div>
-      <div class="fly-foot"><span class="link">Schedule and settings</span><span class="kbd">Ctrl+Shift+D</span></div>
+      <div class="bright"><div class="top"><b>Brightness</b><span>92%</span></div><div class="track"><span class="fill" style="width:48%"></span><span class="thumb" style="left:calc(48% - 10px)"></span></div></div><div class="fly-foot"><span class="link">Schedule and settings</span><span class="kbd">Ctrl+Shift+D</span></div>
     </div>
     <p class="caption" style="margin-top:28px">Tray icon, pinned. Off is a plain ring, on is filled</p>
     <div class="tray">
@@ -143,6 +150,7 @@ body{margin:0;font-family:var(--font);background:var(--bg);color:var(--text);pad
         <div class="section">
           <div class="label">General</div>
           <div class="row"><div><div class="t">Location</div><div class="d">New York &middot; 40.71, &minus;74.01</div></div><span class="link">Change</span></div>
+          <div class="row"><div><div class="t">Brightness</div><div class="d">Your setting from the tray. The schedule never changes it</div></div><span class="d">92%</span></div>
           <div class="row"><div><div class="t">Start at sign-in</div><div class="d">Boost is always off when Windows starts</div></div><span class="switch on"></span></div>
           <div class="row"><div><div class="t">Fine-tune levels</div><div class="d">Black lift, gamma, contrast, brightness, monitor brightness</div></div><span class="chev">&#8250;</span></div>
         </div>
