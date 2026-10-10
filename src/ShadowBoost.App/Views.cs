@@ -99,9 +99,9 @@ public sealed class MainView : UserControl
             if (period == Period.Night)
             {
                 var inline = new WrapPanel(); inline.Children.Add(UI.Text("From ",12,"Text3"));
-                TextBox? clock = null; clock = UI.Field(UI.Clock(settings.NightStart), text => { if (UI.ParseTime(text,out var t)) { settings.NightStart = t; app.Save(); } else clock!.Text = UI.Clock(settings.NightStart); },70); clock.Padding = new Thickness(3,0,3,0); inline.Children.Add(clock); inline.Children.Add(UI.Text(settings.FollowSun ? " to sunrise" : " to day",12,"Text3")); left.Children.Add(inline);
+                TextBox? clock = null; clock = UI.Field(UI.Clock(settings.NightStart), text => { if (UI.ParseTime(text,out var t)) { settings.NightStart = t; app.Save(); } else clock!.Text = UI.Clock(settings.NightStart); },70); clock.Padding = new Thickness(3,0,3,0); inline.Children.Add(clock); inline.Children.Add(UI.Text(settings.FollowSun ? " to sunrise" : " to " + UI.Clock(settings.DayStart),12,"Text3")); left.Children.Add(inline);
             }
-            else left.Children.Add(UI.Text(period == Period.Day ? (settings.FollowSun ? "Sunrise to sunset" : "Day to evening") : (settings.FollowSun ? "Sunset to night" : "Evening to night"),12,"Text3"));
+            else left.Children.Add(UI.Text(period == Period.Day ? (settings.FollowSun ? "Sunrise to sunset" : $"{UI.Clock(settings.DayStart)} to {UI.Clock(settings.EveningStart)}") : (settings.FollowSun ? "Sunset to night" : $"{UI.Clock(settings.EveningStart)} to night"),12,"Text3"));
             page.Children.Add(UI.Row(left,UI.Segments(settings.PeriodLevels[period], level => { settings.PeriodLevels[period] = level; app.Save(); },true)));
         }
         UI.Section(page,"General");
@@ -125,12 +125,31 @@ public sealed class MainView : UserControl
         foreach (var child in canvas.Children.OfType<Rectangle>())
             child.Clip = new RectangleGeometry(new Rect(-Canvas.GetLeft(child),0,width,10),5,5);
         panel.Children.Add(canvas);
-        var labels = new Canvas { Width = width, Height = 32 };
-        var midnight = UI.Text("12 AM",12,"Text3"); labels.Children.Add(midnight);
+        var labels = new Canvas { Width = width, Height = 18 };
+        var entries = new List<(double X, string Full, string Short)> { (0, "12 AM", "12 AM") };
         foreach (var slot in slots.Skip(1))
         {
             string prefix = slot.Period == Period.Day ? (app.Settings.FollowSun ? "Sunrise " : "Day ") : slot.Period == Period.Evening ? (app.Settings.FollowSun ? "Sunset " : "Evening ") : "";
-            var label = UI.Text(prefix.TrimEnd() + (prefix.Length > 0 ? "\n" : "") + UI.Clock(slot.Start),12,"Text3"); label.TextWrapping = TextWrapping.NoWrap; label.TextAlignment = TextAlignment.Center; label.Measure(new Size(double.PositiveInfinity,double.PositiveInfinity)); Canvas.SetLeft(label,Math.Clamp(X(slot.Start)-label.DesiredSize.Width/2,0,width-label.DesiredSize.Width)); labels.Children.Add(label);
+            entries.Add((X(slot.Start), prefix + UI.Clock(slot.Start), UI.Clock(slot.Start)));
+        }
+        bool Layout(bool shorten)
+        {
+            labels.Children.Clear(); double right = -8;
+            foreach (var entry in entries)
+            {
+                var label = UI.Text(shorten ? entry.Short : entry.Full,12,"Text3");
+                label.TextWrapping = TextWrapping.NoWrap;
+                label.Measure(new Size(double.PositiveInfinity,double.PositiveInfinity));
+                double x = Math.Max(Math.Clamp(entry.X,0,width-label.DesiredSize.Width),right+8);
+                if (x + label.DesiredSize.Width > width) { labels.Children.Clear(); return false; }
+                Canvas.SetLeft(label,x); labels.Children.Add(label); right = x + label.DesiredSize.Width;
+            }
+            return true;
+        }
+        if (!Layout(false))
+        {
+            entries.RemoveAt(0);
+            if (!Layout(false)) Layout(true);
         }
         panel.Children.Add(labels); return panel;
     }

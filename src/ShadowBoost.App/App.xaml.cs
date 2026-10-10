@@ -36,7 +36,7 @@ public partial class App : Application
     ushort[] expected = GammaRamp.Identity();
     string rampCheck = "identity";
     DateTimeOffset pinDeadline;
-    bool quitting;
+    bool quitting, wasEnabled;
     static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
 
     protected override void OnStartup(StartupEventArgs e)
@@ -71,7 +71,7 @@ public partial class App : Application
         hotkey.AddHook((IntPtr hwnd, int msg, IntPtr w, IntPtr l, ref bool handled) => { if (msg == 0x312) { Toggle(); handled = true; } return IntPtr.Zero; });
         // Isolated checks must not steal the installed app's hotkey.
         if (!Isolated && !Dry) Native.RegisterHotKey(hotkey.Handle, 1, 0x4006, 0x44);
-        tray = new Forms.NotifyIcon { Visible = true };
+        tray = new Forms.NotifyIcon { Visible = !Isolated };
         tray.MouseClick += (_, a) => Dispatcher.Invoke(() => { if (a.Button == Forms.MouseButtons.Left) ToggleFlyout(); else if (a.Button == Forms.MouseButtons.Right) Menu(); });
         debounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         debounce.Tick += (_, _) => { debounce.Stop(); try { var text = File.ReadAllText(settingsPath); if (text != lastSaved) { Settings = Settings.Load(settingsPath); lastSaved = text; Engine.UpdateSettings(Settings); Refresh(true); } } catch (IOException ex) { Trace.WriteLine(ex); debounce.Start(); } };
@@ -130,7 +130,8 @@ public partial class App : Application
         var state = State;
         var ramp = state.AppliedCurve == null ? GammaRamp.Identity() : GammaRamp.Build(state.AppliedCurve);
         bool mismatch = !Dry && !Native.Matches(expected);
-        if (apply || mismatch || !expected.SequenceEqual(ramp)) Native.Apply(ramp, Dry);
+        if (state.Enabled ? (apply || mismatch || !expected.SequenceEqual(ramp)) : wasEnabled) Native.Apply(ramp, Dry);
+        wasEnabled = state.Enabled;
         expected = ramp;
         rampCheck = Dry ? "dry" : (!Native.Matches(expected) ? "mismatch" : state.Enabled ? "boost" : "identity");
         UpdateTray(); Changed?.Invoke(); WriteStatus();

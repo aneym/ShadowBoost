@@ -52,9 +52,12 @@ internal static class Native
     public static bool Matches(ushort[] values)
     {
         bool matches = true;
-        Displays((dc, primary) => { if (!primary) return; var ramp = new Ramp(new ushort[256]); matches = GetDeviceGammaRamp(dc, ref ramp) && ramp.Red.SequenceEqual(values) && ramp.Green.SequenceEqual(values) && ramp.Blue.SequenceEqual(values); });
+        Displays((dc, primary) => { if (!primary) return; var ramp = new Ramp(new ushort[256]); matches = GetDeviceGammaRamp(dc, ref ramp) && WithinTolerance(ramp.Red, values) && WithinTolerance(ramp.Green, values) && WithinTolerance(ramp.Blue, values); });
         return matches;
     }
+    static bool WithinTolerance(ushort[] actual, ushort[] expected) =>
+        actual.Length == expected.Length && actual.Zip(expected, (a, b) => Math.Abs((int)a - b) <= 512).All(value => value);
+
     static void Displays(Action<IntPtr, bool> action)
     {
         for (uint i = 0; ; i++)
