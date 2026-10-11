@@ -69,6 +69,7 @@ Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { ($_.Actions | F
     catch { Write-Output "NEEDS admin: $line ($($_.Exception.Message))" } }
 Get-ChildItem $env:USERPROFILE -Filter 'ShadowBoost.legacy*.exe' -ErrorAction SilentlyContinue | ForEach-Object {
     Rename-Item $_.FullName ($_.Name + '.retired'); Add-Content $revert "rename `"$($_.FullName).retired`" back to `"$($_.FullName)`""; Write-Output "renamed $($_.FullName) -> .retired" }
+Assert-NoGame
 # Stop the running copy through its own --quit (it resets gamma), then make sure no copy is left.
 if (Get-Process ShadowBoost -ErrorAction SilentlyContinue) {
     $q = Start-Process -FilePath $exe -ArgumentList '--quit' -PassThru -WindowStyle Hidden; $q.WaitForExit(10000) | Out-Null

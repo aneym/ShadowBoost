@@ -19,7 +19,9 @@ function Wsl-Process([string]$Arguments, [byte[]]$InputBytes) {
     return $stdout.Result
 }
 function Put-File([string]$Name, [byte[]]$Bytes) { Wsl-Process "/bin/sh -c `"mkdir -p $outDir; cat > $outDir/$Name`"" $Bytes | Out-Null }
-foreach ($game in 'LeagueClient', 'League of Legends', 'VALORANT-Win64-Shipping', 'cs2', 'dota2') { if (Get-Process -Name $game -ErrorAction SilentlyContinue) { throw "game running: $game" } }
+# Every job aborts while a game (or League's client) runs; bodies call Assert-NoGame again right before they touch the display or the installed app.
+function Assert-NoGame { foreach ($game in 'PioneerGame', 'LeagueClient', 'League of Legends', 'VALORANT-Win64-Shipping', 'cs2', 'dota2') { if (Get-Process -Name $game -ErrorAction SilentlyContinue) { throw "game running: $game.exe; aborting before any change" } } }
+Assert-NoGame
 $buildOut = Join-Path $env:LOCALAPPDATA 'Temp\sb-build\out'; New-Item -ItemType Directory -Force $buildOut | Out-Null
 $stagedExe = Join-Path $buildOut 'ShadowBoost.exe'
 [IO.File]::WriteAllBytes($stagedExe, [Convert]::FromBase64String((Wsl-Process "/bin/cat $stageDir/exe.b64" $null).Trim()))

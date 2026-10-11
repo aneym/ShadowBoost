@@ -12,6 +12,7 @@ function Leg([string]$name, [string[]]$a, [scriptblock]$ok, [byte[]]$codes) {
     App $a; try { $m = Await $name $ok; $r = 'PASS' } catch { $m = Mon; $r = 'FAIL'; $script:fails++ }
     $top = Top; $line = "$r $name level=$($top.brightnessLevel) effective=$($top.effectiveLevel) ramp=$($top.rampBrightness) app=$(ConvertTo-Json -Compress -Depth 6 $m)"; Write-Output $line; Add-Content (Join-Path $evidence 'hwcheck.log') $line; Vcp $name $codes
 }
+Assert-NoGame
 if (-not (Get-Process ShadowBoost -ErrorAction SilentlyContinue)) { throw 'installed ShadowBoost is not running' }
 Copy-Item $settingsFile (Join-Path $evidence 'settings-before.json'); Copy-Item $status (Join-Path $evidence 'status-before.json')
 $before = Mon; if (-not $before) { throw 'status has no hardware monitor' }
