@@ -88,6 +88,8 @@ public partial class App : Application
             mutex.ReleaseMutex(); mutex.Dispose(); Shutdown(3); return;
         }
         Directory.CreateDirectory(dataDir);
+        // A tray app that vanishes leaves the display as it was; log a UI-thread failure to errors.log and keep running.
+        DispatcherUnhandledException += (_, a) => { try { File.AppendAllText(Path.Combine(dataDir, "errors.log"), $"{DateTimeOffset.Now:O} {a.Exception}\n"); } catch (IOException) { } a.Handled = true; };
         if (!File.Exists(settingsPath))
         {
             var legacy = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ShadowBoost.txt");
@@ -349,7 +351,7 @@ public partial class App : Application
         Directory.CreateDirectory(Path.GetDirectoryName(statusPath)!);
         string tmp = statusPath + ".tmp";
         var look = Look;
-        File.WriteAllText(tmp, JsonSerializer.Serialize(new { pid = Environment.ProcessId, exePath = exe, dataDir, updatedAt = DateTimeOffset.Now, dryGamma = Dry, state.Enabled, state.Period, state.ScheduledLevel, state.ActiveLevel, state.IsOverride, state.NextChange, state.AppliedCurve, userBrightness = Settings.UserBrightness,
+        var json = JsonSerializer.Serialize(new { pid = Environment.ProcessId, exePath = exe, dataDir, updatedAt = DateTimeOffset.Now, dryGamma = Dry, state.Enabled, state.Period, state.ScheduledLevel, state.ActiveLevel, state.IsOverride, state.NextChange, state.AppliedCurve, userBrightness = Settings.UserBrightness,
             warm = new { on = look.Warmth.On, factor = Math.Round(look.Warmth.Factor, 3), kelvin = look.Kelvin, appliedKelvin = AppliedKelvin, target = Settings.WarmKelvin, held = look.Warmth.Held, nextChange = look.Warmth.NextChange, schedule = Settings.WarmSchedule },
             dim = new { on = look.Dimming.On, factor = Math.Round(look.Dimming.Factor, 3), percent = Settings.DimPercent, schedule = Settings.DimSchedule, nextChange = look.Dimming.NextChange },
             brightness = Math.Round(look.Brightness, 2), brightnessSource = HardwareBrightness ? "monitor" : "gamma", brightnessLevel = Settings.BrightnessLevel, effectiveLevel = HardwareBrightness ? EffectiveLevel(look) : (double?)null, rampBrightness = Math.Round(look.Brightness, 2),
@@ -360,8 +362,13 @@ public partial class App : Application
                 gains = m.Caps.Has(0x16) ? new { neutral = Saved(m)?.Gains, target = GainValues(m, v => v?.Target), current = GainValues(m, v => v?.Current), readback = GainValues(m, v => v?.Readback) } : null,
                 warmth = HardwareWarmth ? "monitor" : "gamma", warmthOnMonitor = GainsActive(m) }).ToList(),
             expectedMid = new[] { expected.Red[128], expected.Green[128], expected.Blue[128] },
-            rampMid = Dry ? null : Native.RampMid(), rampCheck, runKey = RunValue(), trayPinned = PinValue() }, Json));
-        File.Move(tmp, statusPath, true);
+            rampMid = Dry ? null : Native.RampMid(), rampCheck, runKey = RunValue(), trayPinned = PinValue() }, Json);
+        // A reader holding status.json open (a check, an editor, antivirus) makes the replace fail; retry briefly, never crash.
+        for (int attempt = 0; ; attempt++)
+        {
+            try { File.WriteAllText(tmp, json); File.Move(tmp, statusPath, true); return; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { if (attempt >= 4) { Trace.WriteLine(ex); return; } Thread.Sleep(40); }
+        }
     }
     const string RunPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     const string PinPath = @"Control Panel\NotifyIconSettings";
