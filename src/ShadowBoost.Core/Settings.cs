@@ -8,6 +8,13 @@ public enum LevelId { Gentle, Balanced, Strong }
 public enum Period { Day, Evening, Night }
 public sealed record Curve(int BlackLift, int Gamma, int Contrast, int Brightness);
 
+/// <summary>Saved hardware (DDC/CI) state of one monitor; Brightness is percent 0..100 of its hardware range.</summary>
+public sealed class MonitorSettings
+{
+    public string? Model { get; set; }
+    public int? Brightness { get; set; }
+}
+
 public sealed class Settings
 {
     public double Latitude { get; set; } = 40.7128;
@@ -29,7 +36,9 @@ public sealed class Settings
     };
     public bool StartAtSignIn { get; set; } = true;
     public int UserBrightness { get; set; } = 100;
+    // Legacy: still loaded and saved, no longer used by the app.
     public int? MonitorBrightness { get; set; }
+    public Dictionary<string, MonitorSettings> Monitors { get; set; } = new();
     public bool TrayPinApplied { get; set; }
     public NightSchedule WarmSchedule { get; set; } = NightSchedule.Sunset;
     public TimeOnly WarmFrom { get; set; } = new(21, 0);
@@ -124,6 +133,12 @@ public sealed class Settings
         if (!Enum.IsDefined(WarmSchedule)) WarmSchedule = NightSchedule.Sunset;
         if (!Enum.IsDefined(DimSchedule)) DimSchedule = NightSchedule.Off;
         if (MonitorBrightness.HasValue) MonitorBrightness = Math.Clamp(MonitorBrightness.Value, 0, 100);
+        Monitors ??= new();
+        foreach (var (key, monitor) in Monitors.ToList())
+        {
+            if (monitor == null) { Monitors[key] = new(); continue; }
+            if (monitor.Brightness.HasValue) monitor.Brightness = Math.Clamp(monitor.Brightness.Value, 0, 100);
+        }
     }
 
     private sealed class ClockConverter : JsonConverter<TimeOnly>

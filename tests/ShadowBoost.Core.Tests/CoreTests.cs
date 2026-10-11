@@ -324,6 +324,7 @@ public sealed class CoreTests
             };
             settings.PeriodLevels[Period.Day] = LevelId.Gentle;
             settings.Curves[LevelId.Balanced] = new(9, 80, 117, 100);
+            settings.Monitors["GSM780E#5&20e287fe&0&UID4352"] = new() { Model = "WK95U", Brightness = 63 };
             settings.Save(path);
             var json = File.ReadAllText(path);
             Assert.Contains("\"nightStart\": \"01:15\"", json);
@@ -341,6 +342,8 @@ public sealed class CoreTests
             Assert.Equal(settings.WarmHold, loaded.WarmHold);
             Assert.Equal(settings.PeriodLevels.OrderBy(p => p.Key), loaded.PeriodLevels.OrderBy(p => p.Key));
             Assert.Equal(settings.Curves.OrderBy(p => p.Key), loaded.Curves.OrderBy(p => p.Key));
+            var monitor = Assert.Single(loaded.Monitors);
+            Assert.Equal(("GSM780E#5&20e287fe&0&UID4352", "WK95U", 63), (monitor.Key, monitor.Value.Model, monitor.Value.Brightness));
             File.WriteAllText(path, "{\"warmKelvin\":9000,\"dimPercent\":5}");
             loaded = Settings.Load(path);
             Assert.Equal((6500, 30, NightSchedule.Sunset), (loaded.WarmKelvin, loaded.DimPercent, loaded.WarmSchedule));
@@ -349,6 +352,11 @@ public sealed class CoreTests
             Assert.Equal(LevelId.Strong, loaded.PeriodLevels[Period.Day]);
             Assert.Equal(new(4, 82, 100, 100), loaded.Curves[LevelId.Gentle]);
             Assert.Equal(new(30, 30, 150, 50), loaded.Curves[LevelId.Balanced]);
+            File.WriteAllText(path, "{\"monitors\":{\"a\":{\"brightness\":140},\"b\":{\"brightness\":-5},\"c\":null,\"d\":{}}}");
+            loaded = Settings.Load(path);
+            Assert.Equal(new int?[] { 100, 0, null, null }, new[] { "a", "b", "c", "d" }.Select(k => loaded.Monitors[k].Brightness));
+            File.WriteAllText(path, "{\"monitors\":null}");
+            Assert.Empty(Settings.Load(path).Monitors);
             File.WriteAllText(path, "{broken");
             loaded = Settings.Load(path);
             Assert.Equal("New York", loaded.PlaceName);
@@ -356,5 +364,88 @@ public sealed class CoreTests
             Assert.Equal("{broken", File.ReadAllText(path + ".bad"));
         }
         finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    const string LgCaps = "(prot(monitor)type(lcd)model(WK95U)cmds(01 02 03 0C E3 F3)vcp(02 04 05 08 10 12 14(05 08 0B ) 16 18 1A 52 60(11 12 0F 10 ) AC AE B2 B6 C0 C6 C8 C9 D6(01 04) DF 62 8D F4 F5(01 02 03 04) F6(00 01 02) 4D 4E 4F 15(01 06 11 13 14 15 18 19 20 22 23 24 28 29 32 48) F7(00 01 02 03) F8(00 01) F9 E4 E5 E6 E7 E8 E9 EA EB EF FA(00 01) FD(00 01) FE(00 01 02) FF)mccs_ver(2.1)mswhql(1))";
+
+    // Guards the capabilities parser on the real LG ULTRAGEAR+ string, a compact variant and garbage; a parser with many edge cases.
+    [Fact]
+    public void CapsParseRealString()
+    {
+        var caps = VcpCaps.Parse(LgCaps);
+        Assert.Equal(("WK95U", "2.1"), (caps.Model, caps.Mccs));
+        Assert.All(new byte[] { 0x10, 0x12, 0x16, 0x18, 0x1A }, code => Assert.True(caps.Has(code)));
+        Assert.False(caps.Has(0x0C));
+        Assert.False(caps.Has(0x72));
+        Assert.Null(caps.Codes[0x10]);
+        Assert.Equal(new[] { 0x05, 0x08, 0x0B }, caps.Codes[0x14]);
+        Assert.Equal(new[] { 0x11, 0x12, 0x0F, 0x10 }, caps.Codes[0x60]);
+        Assert.Equal(16, caps.Codes[0x15]!.Count);
+    }
+
+    [Fact]
+    public void CapsParseCompactAndLowerCase()
+    {
+        var caps = VcpCaps.Parse("(prot(monitor)model(abc)vcp(10 14(05 0b)1a 60(0f))mccs_ver(2.2))");
+        Assert.Equal(("abc", "2.2"), (caps.Model, caps.Mccs));
+        Assert.Equal(new byte[] { 0x10, 0x14, 0x1A, 0x60 }, caps.Codes.Keys.Order());
+        Assert.Equal(new[] { 0x05, 0x0B }, caps.Codes[0x14]);
+        Assert.Equal(new[] { 0x0F }, caps.Codes[0x60]);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("garbage")]
+    [InlineData("))((vcp(")]
+    [InlineData("(vcp(zz 1ff")]
+    public void CapsParseGarbageIsEmpty(string text)
+    {
+        var caps = VcpCaps.Parse(text);
+        Assert.Empty(caps.Codes);
+        Assert.Null(caps.Model);
+    }
+
+    [Fact]
+    public void CapsParseSurvivesDeepNesting() => Assert.Empty(VcpCaps.Parse(new string('(', 5000)).Codes);
+
+    // Guards the percent/raw mapping and dim scaling at the range ends and for 100- and 255-step monitors.
+    [Theory]
+    [InlineData(0, 100, 0)]
+    [InlineData(50, 100, 50)]
+    [InlineData(100, 100, 100)]
+    [InlineData(0, 255, 0)]
+    [InlineData(50, 255, 128)]
+    [InlineData(100, 255, 255)]
+    [InlineData(140, 255, 255)]
+    [InlineData(-3, 255, 0)]
+    public void HardwareRawMapping(int percent, int max, int raw)
+    {
+        Assert.Equal(raw, Hardware.ToRaw(percent, max));
+        Assert.Equal(Math.Clamp(percent, 0, 100), Hardware.ToPercent(raw, max));
+    }
+
+    [Fact]
+    public void HardwarePercentEdgesAndDimming()
+    {
+        Assert.Equal(0, Hardware.ToPercent(40, 0));
+        Assert.Equal(100, Hardware.ToPercent(300, 255));
+        Assert.Equal(63, Hardware.Dimmed(63, 1));
+        Assert.Equal(40, Hardware.Dimmed(50, 0.8));
+        Assert.Equal(100, Hardware.Dimmed(100, 1.5));
+        Assert.Equal(0, Hardware.Dimmed(50, -1));
+    }
+
+    // Guards that the dim scale used for the monitor is the same one Look applies to the ramp brightness.
+    [Fact]
+    public void DimScaleMatchesLook()
+    {
+        var s = new Settings { DimSchedule = NightSchedule.Custom, DimFrom = new(23, 0), DimTo = new(7, 0), DimPercent = 60, UserBrightness = 90, FadeMinutes = 0, WarmSchedule = NightSchedule.Off };
+        var night = Night.Look(June(23, 30), s, Ny);
+        Assert.Equal(0.6, Night.DimScale(night.Dimming, s), 6);
+        Assert.Equal(54, night.Brightness, 6);
+        var day = Night.Look(June(12), s, Ny);
+        Assert.Equal(1, Night.DimScale(day.Dimming, s));
+        Assert.Equal(90, day.Brightness, 6);
     }
 }

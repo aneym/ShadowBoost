@@ -19,6 +19,17 @@ survives a restart, and then the schedule takes over. Dimming multiplies the
 saved brightness and never rewrites it. The location comes from typed
 coordinates or, on request, from the position Windows already knows.
 
+The Brightness slider drives the monitor's own brightness over DDC/CI (VCP
+0x10) across its full 0-100 % range when the monitor answers. It is saved per
+monitor and applied at start, so it sticks across restarts and reboots; the
+first run adopts the monitor's current value instead of changing it. Dimming
+lowers the monitor's brightness, and changes made with the monitor's buttons are
+picked up within about 30 seconds and kept as the saved value. Warmth and shadow
+boost still use the gamma ramp. Without DDC/CI (or with `--dry-gamma`) the slider
+falls back to scaling the gamma ramp (50-130 %). Exiting leaves the monitor's
+brightness alone. `status.json` lists each monitor, its capabilities and the
+brightness source (`monitor` or `gamma`).
+
 Shadow boost is **off on every start**, including sign-in; warmth, dimming and
 brightness resume from the saved settings.
 
@@ -26,7 +37,7 @@ Shadow boost levels Gentle, Balanced and Strong use editable black lift,
 gamma, contrast and brightness curves. The schedule follows local sunrise/sunset (New York by
 default), or fixed Day/Evening times, with an editable Night start. Picking a
 level holds it until the next boundary; Back to schedule clears the hold.
-Settings include sign-in startup and optional DDC/CI monitor brightness.
+Settings include sign-in startup.
 The UI and monochrome tray glyph follow Windows light/dark themes live.
 
 ## Build
@@ -49,11 +60,11 @@ change the installed app, gamma, sign-in registration or tray promotion.
 `ShadowBoost.exe --tray` starts hidden (the sign-in command). `--show` opens
 schedule/settings; `--flyout` toggles the flyout. `--night on|off|toggle|schedule`
 drives the warmth quick toggle, `--warmth <kelvin>` and `--brightness <percent>`
-set the sliders. `--on`, `--off`, `--level gentle|balanced|strong` and
+set the sliders (`--brightness` is 0-100 % of the monitor when DDC/CI works). `--on`, `--off`, `--level gentle|balanced|strong` and
 `--schedule` drive shadow boost, and `--quit` stops the running instance. A second launch forwards commands through a per-user/data-dir pipe.
 
 `--home <directory>` isolates settings and status. `--dry-gamma` is a startup
-flag that computes ramps but makes no gamma or monitor-brightness writes.
+flag that computes ramps but makes no gamma or DDC/CI writes.
 Either isolation flag suppresses Run/tray-pinning writes. For checks, always
 use both and `--tray`, never `--show` or `--flyout`.
 
@@ -67,5 +78,4 @@ that directory. Existing `%APPDATA%\ShadowBoost.txt` is imported on first run
 only without `--home`. External settings edits reload after a short debounce.
 Status includes the warmth and dimming state and the expected and read-back
 red, green and blue ramp midpoints. Gamma resets to identity at exit; games resetting ramps and
-resume/display/time changes trigger reapplication while enabled. Saved
-monitor brightness is never applied at startup.
+resume/display/time changes trigger reapplication while enabled.

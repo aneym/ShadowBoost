@@ -76,6 +76,10 @@ internal static class UI
         }
         return panel;
     }
+    // With hardware brightness the slider is the monitor's own 0..100 % range; otherwise it scales the gamma ramp.
+    internal static StackPanel BrightnessSlider(App app, string id, bool large = false) => app.HardwareBrightness
+        ? Slider("Brightness", 0, 100, app.HardwarePercent, n => n + "%", app.SetHardwareBrightness, id, large: large)
+        : Slider("Brightness", 50, 130, app.Settings.UserBrightness, n => n + "%", app.SetUserBrightness, id, large: large);
     // The warmth slider runs from neutral on the left to warmest on the right, in 100 K steps.
     internal static StackPanel WarmSlider(App app, string title, bool large = false, string? left = "Less warm", string? right = "More warm") =>
         Slider(title, 0, (Night.NeutralKelvin - Night.MinKelvin) / 100, (Night.NeutralKelvin - app.Settings.WarmKelvin) / 100.0,
@@ -125,7 +129,7 @@ public sealed class FlyoutView : UserControl
         if (snapshot == null && look.Warmth.On && app.AppliedKelvin > look.Kelvin) copy += $" Windows allows {app.AppliedKelvin} K on this display.";
         body.Children.Add(new Border { Margin = new Thickness(16,2,16,0), Child = UI.Text(copy,13,"Text2") });
         body.Children.Add(new Border { Margin = new Thickness(16,16,16,0), Child = UI.WarmSlider(app, "Warmth") });
-        body.Children.Add(new Border { Margin = new Thickness(16,16,16,0), Child = UI.Slider("Brightness", 50, 130, settings.UserBrightness, n => n + "%", app.SetUserBrightness, "BrightnessSlider") });
+        body.Children.Add(new Border { Margin = new Thickness(16,16,16,0), Child = UI.BrightnessSlider(app, "BrightnessSlider") });
         var boost = new Grid { Margin = new Thickness(16,14,16,0) }; boost.ColumnDefinitions.Add(new()); boost.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
         var boostTitle = new StackPanel(); boostTitle.Children.Add(UI.Text("Shadow boost",13,weight:FontWeights.SemiBold)); if (s.Enabled) boostTitle.Children.Add(UI.Text(UI.BoostCopy(s, settings),12,"Text3"));
         boost.Children.Add(boostTitle); var boostSwitch = UI.Switch(s.Enabled, app.Toggle, "FlyoutToggle"); Grid.SetColumn(boostSwitch,1); boost.Children.Add(boostSwitch); body.Children.Add(boost);
@@ -156,7 +160,7 @@ public sealed class MainView : UserControl
         var page = new StackPanel { Margin = new Thickness(28,4,28,24) };
         var head = new Grid(); head.ColumnDefinitions.Add(new()); head.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
         var titles = new StackPanel(); titles.Children.Add(UI.Text("ShadowBoost",28,weight:FontWeights.SemiBold));
-        string status = (look.Warmth.On ? $"Warm {look.Kelvin} K" + (look.Warmth.NextChange == DateTimeOffset.MaxValue ? "" : $" until {UI.Clock(look.Warmth.NextChange)}") : "Daylight") + $" · Brightness {Math.Round(look.Brightness)}%";
+        string status = (look.Warmth.On ? $"Warm {look.Kelvin} K" + (look.Warmth.NextChange == DateTimeOffset.MaxValue ? "" : $" until {UI.Clock(look.Warmth.NextChange)}") : "Daylight") + $" · Brightness {app.BrightnessShown(look)}%";
         titles.Children.Add(UI.Text(status,13,"Text2")); head.Children.Add(titles);
         var toggle = UI.Switch(look.Warmth.On,app.ToggleWarm,"MainWarmToggle"); Grid.SetColumn(toggle,1); head.Children.Add(toggle); page.Children.Add(head);
         bool anySun = settings.WarmSchedule == NightSchedule.Sunset || settings.DimSchedule == NightSchedule.Sunset;
@@ -168,7 +172,7 @@ public sealed class MainView : UserControl
         page.Children.Add(UI.Row(UI.Slider("Dim to", 30, 100, settings.DimPercent, n => $"{n}% of your brightness", app.SetDim, "DimSlider", large: true), null));
 
         UI.Section(page,"General");
-        page.Children.Add(UI.Row(UI.Slider("Brightness", 50, 130, settings.UserBrightness, n => n + "%", app.SetUserBrightness, "MainBrightnessSlider", large: true), null, true));
+        page.Children.Add(UI.Row(UI.BrightnessSlider(app, "MainBrightnessSlider", true), null, true));
         string coordinates = settings.Longitude.ToString("0.00",CultureInfo.InvariantCulture).Replace("-","−");
         page.Children.Add(UI.Row(UI.Caption("Location",$"{settings.PlaceName} · {settings.Latitude.ToString("0.00",CultureInfo.InvariantCulture)}, {coordinates}"), UI.Link(locationOpen ? "Done" : "Change", () => { locationOpen = !locationOpen; Build(); })));
         if (locationOpen) Location(page);
@@ -312,7 +316,7 @@ public sealed class BoostView : UserControl
             page.Children.Add(UI.Row(UI.Text("Day starts",13),UI.ClockField(settings.DayStart, t => { settings.DayStart = t; app.Save(); }, 100)));
             page.Children.Add(UI.Row(UI.Text("Evening starts",13),UI.ClockField(settings.EveningStart, t => { settings.EveningStart = t; app.Save(); }, 100)));
         }
-        page.Children.Add(UI.Row(UI.Caption("Fine-tune levels","Black lift, gamma, contrast, brightness, monitor brightness"), UI.Link("›",app.FineTune)));
+        page.Children.Add(UI.Row(UI.Caption("Fine-tune levels","Black lift, gamma, contrast, brightness"), UI.Link("›",app.FineTune)));
         var bg = new Border { Child = page }; bg.SetResourceReference(Border.BackgroundProperty,"Bg");
         Content = live ? new ScrollViewer { Content = bg, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled } : bg;
     }
@@ -339,10 +343,6 @@ public sealed class FineTuneView : UserControl
         Slider("Contrast",50,150,c.Contrast,(v,n)=>v with { Contrast=n },n=>n+"%");
         Slider("Brightness",50,130,c.Brightness,(v,n)=>v with { Brightness=n },n=>n+"%");
         page.Children.Add(UI.Link("Reset to default",()=> { app.Settings.Curves[selected]=new Settings().Curves[selected]; app.Save(); Build(); }));
-        UI.Section(page,"Monitor brightness");
-        int? brightness=app.MonitorBrightness;
-        if (brightness == null) page.Children.Add(UI.Text("This monitor does not accept brightness control.",13,"Text3"));
-        else { var label=UI.Text(brightness+"%",13,"Text2"); page.Children.Add(label); var slider=new System.Windows.Controls.Slider { Minimum=0,Maximum=100,Value=app.Settings.MonitorBrightness ?? brightness.Value,TickFrequency=1,IsSnapToTickEnabled=true }; slider.ValueChanged += (_,e)=> { int n=(int)e.NewValue; label.Text=n+"%"; app.SetBrightness(n); }; page.Children.Add(slider); }
         var bg = new Border { Child=page }; bg.SetResourceReference(Border.BackgroundProperty,"Bg"); Content=bg;
     }
 }

@@ -32,18 +32,6 @@ internal static class Native
     [DllImport("user32.dll")] internal static extern bool DestroyIcon(IntPtr icon);
     [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
     [DllImport("user32.dll")] internal static extern uint GetDpiForWindow(IntPtr hwnd);
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct PhysicalMonitor
-    {
-        public IntPtr Handle;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string Description;
-    }
-    delegate bool MonitorCallback(IntPtr monitor, IntPtr dc, IntPtr rect, IntPtr data);
-    [DllImport("user32.dll")] static extern bool EnumDisplayMonitors(IntPtr dc, IntPtr rect, MonitorCallback callback, IntPtr data);
-    [DllImport("dxva2.dll")] static extern bool GetNumberOfPhysicalMonitorsFromHMONITOR(IntPtr monitor, out uint count);
-    [DllImport("dxva2.dll")] static extern bool GetPhysicalMonitorsFromHMONITOR(IntPtr monitor, uint count, [Out] PhysicalMonitor[] monitors);
-    [DllImport("dxva2.dll")] static extern bool GetMonitorBrightness(IntPtr monitor, out uint min, out uint current, out uint max);
-    [DllImport("dxva2.dll")] static extern bool SetMonitorBrightness(IntPtr monitor, uint value);
-    [DllImport("dxva2.dll")] static extern bool DestroyPhysicalMonitor(IntPtr monitor);
 
     // Every attached display gets the same ramp, the way f.lux sets each monitor's DC.
     // Returns false when any display refuses the ramp (Windows bounds ramps unless GdiICMGammaRange is raised).
@@ -81,30 +69,6 @@ internal static class Native
             if (dc == IntPtr.Zero) continue;
             try { action(dc, (device.Flags & 4) != 0); } finally { DeleteDC(dc); }
         }
-    }
-    public static int? Brightness(int? set = null)
-    {
-        int? result = null;
-        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (monitor, _, _, _) =>
-        {
-            if (!GetNumberOfPhysicalMonitorsFromHMONITOR(monitor, out var count) || count == 0) return true;
-            var monitors = new PhysicalMonitor[count];
-            if (!GetPhysicalMonitorsFromHMONITOR(monitor, count, monitors)) return true;
-            foreach (var item in monitors)
-            {
-                try
-                {
-                    if (GetMonitorBrightness(item.Handle, out var min, out var current, out var max) && max > min)
-                    {
-                        result ??= (int)((current - min) * 100 / (max - min));
-                        if (set.HasValue) SetMonitorBrightness(item.Handle, min + (uint)(Math.Clamp(set.Value, 0, 100) * (max - min) / 100));
-                    }
-                }
-                finally { DestroyPhysicalMonitor(item.Handle); }
-            }
-            return true;
-        }, IntPtr.Zero);
-        return result;
     }
     public static void Decorate(Window window, bool dark)
     {

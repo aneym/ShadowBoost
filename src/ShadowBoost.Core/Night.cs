@@ -84,12 +84,15 @@ public static class Night
         return new WarmHold(true, morning > now ? morning : Schedule.Local(DateOnly.FromDateTime(local.DateTime).AddDays(1), s.WarmTo, tz));
     }
 
+    /// <summary>The share of the saved brightness left while dimming: 1 in daylight, DimPercent/100 at full night.</summary>
+    public static double DimScale(NightState dim, Settings s) => 1 - dim.Factor * (100 - s.DimPercent) / 100.0;
+
     public static Look Look(DateTimeOffset now, Settings s, TimeZoneInfo tz)
     {
         var warm = State(now, s, NightKind.Warmth, tz);
         var dim = State(now, s, NightKind.Dimming, tz);
         int kelvin = (int)Math.Round(NeutralKelvin - warm.Factor * (NeutralKelvin - s.WarmKelvin));
-        double brightness = s.UserBrightness * (1 - dim.Factor * (100 - s.DimPercent) / 100.0);
+        double brightness = s.UserBrightness * DimScale(dim, s);
         return new(warm, kelvin, dim, brightness);
     }
 
