@@ -16,7 +16,7 @@ sed "s/__SHA__/$sha/" "$root/scripts/pc-install-job.ps1" > "$tmp/shadowboost-ins
 evidence="$(sed -n 's/^EVIDENCE=//p' "$tmp/log" | tr -d '\r' | tr '\\' '/')"
 [[ -n "$evidence" ]]
 mkdir -p "$dest"
-scp -q -r "pc:${evidence#C:}/*" "$dest/"
+scp -q -r "pc:$evidence/*" "$dest/"
 for when in before after; do
   [[ -f "$dest/screen-$when.png" && -f "$dest/ramp-$when.json" ]] && python3 "$root/scripts/as-displayed.py" "$dest/screen-$when.png" "$dest/ramp-$when.json" "$dest/as-displayed-$when.png"
 done
