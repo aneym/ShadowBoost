@@ -1,0 +1,150 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>ShadowBoost night mock</title>
+<style>
+/* Tokens: source for src/ShadowBoost.App/Themes/{Light,Dark}.xaml. Warm tokens are new. */
+:root{
+  --font:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  --bg:#F3F3F3; --surface:#FBFBFB; --surface-2:#F9F9F9; --stroke:#E5E5E5; --stroke-strong:#D1D1D1;
+  --text:#1B1B1B; --text-2:#5F5F5F; --text-3:#8A8A8A;
+  --accent:#005FB8; --accent-text:#FFFFFF; --accent-soft:#E5F0FA;
+  --seg-bg:#EDEDED; --switch-off:#8A8A8A;
+  --cool:#E9EEF5; --warm:#F0A458; --warm-band:#EDB37A; --dim-band:#8F98C4;
+  --shadow:0 8px 24px rgba(0,0,0,.14);
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#202020; --surface:#2B2B2B; --surface-2:#272727; --stroke:#3A3A3A; --stroke-strong:#4A4A4A;
+  --text:#FFFFFF; --text-2:#C5C5C5; --text-3:#9A9A9A;
+  --accent:#60CDFF; --accent-text:#003049; --accent-soft:#1F3A4B;
+  --seg-bg:#1F1F1F; --switch-off:#9A9A9A;
+  --cool:#4A5260; --warm:#E08A3C; --warm-band:#B97A45; --dim-band:#5A63A0;
+  --shadow:0 8px 24px rgba(0,0,0,.45);
+}}
+*{box-sizing:border-box}
+body{margin:0;font-family:var(--font);background:var(--bg);color:var(--text);padding:32px;font-size:14px;width:1340px}
+.stage{display:grid;grid-template-columns:340px 300px 500px;gap:40px;align-items:start}
+.caption{font-size:12px;color:var(--text-3);margin:0 0 10px}
+.flyout{background:var(--surface);border:1px solid var(--stroke);border-radius:8px;box-shadow:var(--shadow);width:340px}
+.fly-head{display:flex;align-items:center;gap:10px;padding:16px 16px 0}
+.fly-head .name{font-weight:600;font-size:14px;flex:1}
+.glyph{width:18px;height:18px}
+.big{font-size:28px;font-weight:600;line-height:36px;padding:14px 16px 0;letter-spacing:-.2px}
+.big .k{color:var(--text-2);font-weight:400;font-size:20px;margin-left:8px}
+.big.off{color:var(--text-2)}
+.sub{color:var(--text-2);font-size:13px;line-height:20px;padding:2px 16px 0}
+.ctl{padding:16px 16px 0}
+.ctl .top{display:flex;justify-content:space-between;font-size:13px;color:var(--text-2);margin-bottom:8px}
+.ctl .top b{font-weight:600;color:var(--text)}
+.track{position:relative;height:4px;border-radius:2px;background:var(--stroke-strong)}
+.track .fill{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:var(--accent)}
+.track.warm{background:linear-gradient(90deg,var(--cool),var(--warm))}
+.thumb{position:absolute;top:-7px;width:18px;height:18px;border-radius:9px;background:var(--accent);border:4px solid var(--surface);box-shadow:0 0 0 1px var(--stroke-strong)}
+.track.warm .thumb{background:var(--warm)}
+.ends{display:flex;justify-content:space-between;font-size:11px;color:var(--text-3);margin-top:6px}
+.line{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 0;font-size:13px}
+.line b{font-weight:600}
+.seg{display:flex;background:var(--seg-bg);border-radius:6px;padding:3px;border:1px solid var(--stroke)}
+.seg span{flex:1;text-align:center;padding:5px 0;border-radius:4px;font-size:12px;color:var(--text-2);white-space:nowrap}
+.seg span.sel{background:var(--accent);color:var(--accent-text);font-weight:600}
+.fly-seg{margin:10px 16px 0}
+.link{color:var(--accent);font-size:13px}
+.fly-foot{display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--stroke);margin-top:16px;padding:12px 16px;background:var(--surface-2);border-radius:0 0 8px 8px}
+.kbd{font-size:12px;color:var(--text-3)}
+.switch{width:40px;height:20px;border-radius:10px;border:1px solid var(--switch-off);position:relative;flex:none}
+.switch::after{content:"";position:absolute;width:12px;height:12px;border-radius:6px;background:var(--switch-off);top:3px;left:4px}
+.switch.on{background:var(--accent);border-color:var(--accent)}
+.switch.on::after{background:var(--accent-text);left:23px}
+.win{background:var(--bg);border:1px solid var(--stroke-strong);border-radius:8px;box-shadow:var(--shadow);width:500px;overflow:hidden}
+.titlebar{height:32px;display:flex;align-items:center;justify-content:flex-end;color:var(--text-2);font-size:12px;gap:22px;padding-right:16px}
+.page{padding:4px 28px 24px}
+.page-head{display:flex;align-items:center;justify-content:space-between}
+.page-head h1{font-size:28px;font-weight:600;margin:0;letter-spacing:-.2px}
+.state{color:var(--text-2);font-size:13px;margin-top:2px}
+.label{font-size:13px;font-weight:600;margin:26px 0 10px}
+.lane{display:grid;grid-template-columns:64px 1fr;align-items:center;gap:10px;font-size:12px;color:var(--text-3);margin-bottom:6px}
+.bar{position:relative;height:8px;border-radius:4px;background:var(--stroke)}
+.bar i{position:absolute;top:0;bottom:0;border-radius:4px}
+.nowline{position:absolute;top:-5px;width:2px;height:18px;background:var(--text);border-radius:1px}
+.ticks{position:relative;height:16px;margin-left:74px;font-size:12px;color:var(--text-3)}
+.ticks span{position:absolute;white-space:nowrap}
+.row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-top:1px solid var(--stroke);gap:12px}
+.row.first{border-top:0}
+.row .t{font-size:14px}
+.row .d{font-size:12px;color:var(--text-3);margin-top:1px}
+.row .seg{width:220px}
+.time{border:1px solid var(--stroke-strong);border-radius:4px;padding:1px 6px;background:var(--surface);font-size:12px}
+.wide{width:100%}
+.wide .top{display:flex;justify-content:space-between;font-size:14px;margin-bottom:10px}
+.wide .top span{font-size:13px;color:var(--text-2)}
+.menu{background:var(--surface);border:1px solid var(--stroke);border-radius:8px;box-shadow:var(--shadow);width:240px;padding:4px}
+.menu div{padding:7px 12px;border-radius:4px;font-size:13px;display:flex;gap:10px}
+.menu div.check::before{content:"✓";color:var(--accent);width:10px;font-size:12px}
+.menu div.nocheck::before{content:"";width:10px}
+.menu hr{border:0;border-top:1px solid var(--stroke);margin:4px 0}
+.note{font-size:12px;color:var(--text-3);line-height:18px;margin-top:14px;max-width:300px}
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="g-on" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.75a6.25 6.25 0 0 0 0 12.5z" fill="currentColor"/><circle cx="8" cy="8" r="2.4" fill="currentColor"/></symbol>
+  <symbol id="g-off" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+</svg>
+<div class="stage">
+  <div>
+    <p class="caption">Tray flyout at night. The switch is the quick toggle for warmth</p>
+    <div class="flyout">
+      <div class="fly-head"><svg class="glyph" style="color:var(--warm)"><use href="#g-on"/></svg><span class="name">ShadowBoost</span><span class="switch on"></span></div>
+      <div class="big">Warm<span class="k">3400 K</span></div>
+      <div class="sub">On until sunrise, 7:12 AM.</div>
+      <div class="ctl"><div class="top"><b>Warmth</b><span>3400 K</span></div><div class="track warm"><span class="thumb" style="left:calc(82% - 9px)"></span></div><div class="ends"><span>Less warm</span><span>More warm</span></div></div>
+      <div class="ctl"><div class="top"><b>Brightness</b><span>54%</span></div><div class="track"><span class="fill" style="width:5%"></span><span class="thumb" style="left:calc(5% - 9px)"></span></div></div>
+      <div class="line"><b>Shadow boost</b><span class="switch"></span></div>
+      <div class="fly-foot"><span class="link">Schedule and settings</span><span class="kbd">Ctrl+Shift+N</span></div>
+    </div>
+    <p class="caption" style="margin-top:28px">Daytime, schedule waiting. Boost on: its levels appear only then</p>
+    <div class="flyout">
+      <div class="fly-head"><svg class="glyph" style="color:var(--text-2)"><use href="#g-off"/></svg><span class="name">ShadowBoost</span><span class="switch"></span></div>
+      <div class="big off">Daylight</div>
+      <div class="sub">Warm from sunset, 6:22 PM.</div>
+      <div class="ctl"><div class="top"><b>Warmth</b><span>3400 K</span></div><div class="track warm"><span class="thumb" style="left:calc(82% - 9px)"></span></div><div class="ends"><span>Less warm</span><span>More warm</span></div></div>
+      <div class="ctl"><div class="top"><b>Brightness</b><span>100%</span></div><div class="track"><span class="fill" style="width:62%"></span><span class="thumb" style="left:calc(62% - 9px)"></span></div></div>
+      <div class="line"><b>Shadow boost</b><span class="switch on"></span></div>
+      <div class="seg fly-seg"><span>Gentle</span><span>Balanced</span><span class="sel">Strong</span></div>
+      <div class="fly-foot"><span class="link">Schedule and settings</span><span class="kbd">Ctrl+Shift+N</span></div>
+    </div>
+  </div>
+  <div>
+    <p class="caption">Right-click menu: open, quick toggle, quit</p>
+    <div class="menu">
+      <div class="nocheck">Open ShadowBoost</div><hr>
+      <div class="check">Warm until 7:12 AM</div>
+      <div class="nocheck">Shadow boost</div><hr>
+      <div class="nocheck">Quit ShadowBoost</div>
+    </div>
+    <p class="note">Warmth and dimming each follow their own schedule: sunset to sunrise from the saved location, or fixed hours. Both fade over the fade time. The quick toggle holds until the next sunrise or sunset, then the schedule takes over again. Brightness is yours: dimming multiplies it and never changes the saved value. Shadow boost is off at every start.</p>
+  </div>
+  <div>
+    <p class="caption">Schedule and settings. One header, rows straight on the surface</p>
+    <div class="win">
+      <div class="titlebar"><span>–</span><span>✕</span></div>
+      <div class="page">
+        <div class="page-head"><div><h1>ShadowBoost</h1><div class="state">Warm 3400 K until 7:12 AM · Brightness 54%</div></div><span class="switch on"></span></div>
+        <div class="label">Today in New York</div>
+        <div class="lane"><span>Warmth</span><div class="bar"><i style="left:0;width:30%;background:var(--warm-band)"></i><i style="left:77%;width:23%;background:var(--warm-band)"></i><span class="nowline" style="left:9%"></span></div></div>
+        <div class="lane"><span>Dimming</span><div class="bar"><i style="left:0;width:29%;background:var(--dim-band)"></i><i style="left:96%;width:4%;background:var(--dim-band)"></i><span class="nowline" style="left:9%"></span></div></div>
+        <div class="ticks"><span style="left:0">12 AM</span><span style="left:24%">Sunrise 7:12 AM</span><span style="left:63%">Sunset 6:22 PM</span></div>
+        <div class="label">Warmth</div>
+        <div class="row first"><div><div class="t">Schedule</div><div class="d">6:22 PM to 7:12 AM, from sunset to sunrise</div></div><div class="seg"><span>Off</span><span class="sel">Sunset</span><span>Custom</span></div></div>
+        <div class="row"><div class="wide"><div class="top">Night warmth<span>3400 K</span></div><div class="track warm"><span class="thumb" style="left:calc(82% - 9px)"></span></div><div class="ends"><span>6500 K</span><span>2700 K</span></div></div></div>
+        <div class="label">Dimming</div>
+        <div class="row first"><div><div class="t">Schedule</div><div class="d">Fixed hours</div></div><div class="seg"><span>Off</span><span>Sunset</span><span class="sel">Custom</span></div></div>
+        <div class="row"><div class="t">Hours</div><div class="d" style="font-size:13px">From <span class="time">11:00 PM</span> to <span class="time">7:00 AM</span></div></div>
+        <div class="row"><div class="wide"><div class="top">Dim to<span>80% of your brightness</span></div><div class="track"><span class="fill" style="width:71%"></span><span class="thumb" style="left:calc(71% - 9px)"></span></div></div></div>
+        <div class="label">General</div>
+        <div class="row first"><div><div class="t">Location</div><div class="d">New York · 40.71, −74.01</div></div><span class="link">Change</span></div>
+        <div class="row"><div><div class="t">Fade</div><div class="d">How long changes take</div></div><div class="seg" style="width:180px"><span>Off</span><span class="sel">20 min</span><span>60 min</span></div></div>
+        <div class="row"><div><div class="t">Start at sign-in</div><div class="d">Warmth resumes; shadow boost stays off</div></div><span class="switch on"></span></div>
+        <div class="row"><div><div class="t">Shadow boost</div><div class="d">Day Strong · Evening Balanced · Night Gentle</div></div><span class="link">›</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</body></html>
