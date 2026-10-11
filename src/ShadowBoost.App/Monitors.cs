@@ -9,7 +9,7 @@ internal sealed record VcpValue(int? Current, int Max, int? Target, int? Readbac
 internal sealed record MonitorInfo(string Key, string Description, string? Model, string? Mccs, VcpCaps Caps, IReadOnlyDictionary<byte, VcpValue> Values)
 {
     internal VcpValue? Brightness => Values.GetValueOrDefault((byte)0x10);
-    internal bool HasBrightness => Brightness is { Current: not null, Max: > 0 };
+    internal bool HasBrightness => Brightness is { Current: not null, Max: > 0, Error: null };
 }
 
 /// <summary>The only place that talks DDC/CI. Every call runs on one background thread, so the UI never blocks on a monitor.</summary>
@@ -76,7 +76,7 @@ internal sealed class MonitorBus : IDisposable
     /// <summary>Queues a read that updates Current and Max, then calls <paramref name="done"/> on the bus thread.</summary>
     internal void Read(string key, byte code, Action<VcpValue>? done = null)
     {
-        lock (gate) { if (disposed) return; jobs.Enqueue(() => { var entry = entries.Find(e => e.Key == key); if (entry == null) return; var value = ReadValue(entry, code, 1); done?.Invoke(value); Publish(); }); Monitor.PulseAll(gate); }
+        lock (gate) { if (disposed) return; jobs.Enqueue(() => { var entry = entries.Find(e => e.Key == key); if (entry == null) return; var value = ReadValue(entry, code, 2); done?.Invoke(value); Publish(); }); Monitor.PulseAll(gate); }
     }
     /// <summary>True while a write for this monitor is queued or being sent.</summary>
     internal bool Busy(string key) { lock (gate) return pending.Keys.Any(k => k.Key == key) || writing?.Key == key; }
@@ -124,6 +124,7 @@ internal sealed class MonitorBus : IDisposable
     {
         var info = new MonitorInfoEx { Size = Marshal.SizeOf<MonitorInfoEx>() };
         if (!GetMonitorInfo(monitor, ref info)) info.Device = "";
+        bool primary = (info.Flags & 1) != 0;
         if (!GetNumberOfPhysicalMonitorsFromHMONITOR(monitor, out var count) || count == 0) return;
         var physical = new PhysicalMonitor[count];
         if (!GetPhysicalMonitorsFromHMONITOR(monitor, count, physical)) return;
@@ -132,7 +133,7 @@ internal sealed class MonitorBus : IDisposable
             string key = index == 0 ? InterfaceKey(info.Device) ?? $"{info.Device}/{index}" : $"{info.Device}/{index}";
             for (int n = 2; entries.Any(e => e.Key == key); n++) key = $"{key.Split('~')[0]}~{n}";
             var entry = new Entry { Key = key, Description = physical[index].Description, Handle = physical[index].Handle };
-            entries.Add(entry);
+            entries.Insert(primary && index == 0 ? 0 : entries.Count, entry);
             string? caps = null;
             for (int attempt = 0; attempt < 3 && caps == null; attempt++)
             {

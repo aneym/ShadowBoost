@@ -76,9 +76,9 @@ internal static class UI
         }
         return panel;
     }
-    // With hardware brightness the slider is the monitor's own 0..100 % range; otherwise it scales the gamma ramp.
+    // With hardware brightness the slider is the one level over monitor and ramp; otherwise it scales the gamma ramp.
     internal static StackPanel BrightnessSlider(App app, string id, bool large = false) => app.HardwareBrightness
-        ? Slider("Brightness", 0, 100, app.HardwarePercent, n => n + "%", app.SetHardwareBrightness, id, large: large)
+        ? Slider("Brightness", 0, Level.Max, app.SavedLevel, n => Level.Label(n), app.SetBrightnessLevel, id, large: large)
         : Slider("Brightness", 50, 130, app.Settings.UserBrightness, n => n + "%", app.SetUserBrightness, id, large: large);
     // The warmth slider runs from neutral on the left to warmest on the right, in 100 K steps.
     internal static StackPanel WarmSlider(App app, string title, bool large = false, string? left = "Less warm", string? right = "More warm") =>
@@ -160,7 +160,7 @@ public sealed class MainView : UserControl
         var page = new StackPanel { Margin = new Thickness(28,4,28,24) };
         var head = new Grid(); head.ColumnDefinitions.Add(new()); head.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
         var titles = new StackPanel(); titles.Children.Add(UI.Text("ShadowBoost",28,weight:FontWeights.SemiBold));
-        string status = (look.Warmth.On ? $"Warm {look.Kelvin} K" + (look.Warmth.NextChange == DateTimeOffset.MaxValue ? "" : $" until {UI.Clock(look.Warmth.NextChange)}") : "Daylight") + $" · Brightness {app.BrightnessShown(look)}%";
+        string status = (look.Warmth.On ? $"Warm {look.Kelvin} K" + (look.Warmth.NextChange == DateTimeOffset.MaxValue ? "" : $" until {UI.Clock(look.Warmth.NextChange)}") : "Daylight") + $" · Brightness {app.BrightnessShown(look)}";
         titles.Children.Add(UI.Text(status,13,"Text2")); head.Children.Add(titles);
         var toggle = UI.Switch(look.Warmth.On,app.ToggleWarm,"MainWarmToggle"); Grid.SetColumn(toggle,1); head.Children.Add(toggle); page.Children.Add(head);
         bool anySun = settings.WarmSchedule == NightSchedule.Sunset || settings.DimSchedule == NightSchedule.Sunset;

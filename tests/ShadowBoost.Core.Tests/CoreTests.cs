@@ -324,7 +324,7 @@ public sealed class CoreTests
             };
             settings.PeriodLevels[Period.Day] = LevelId.Gentle;
             settings.Curves[LevelId.Balanced] = new(9, 80, 117, 100);
-            settings.Monitors["GSM780E#5&20e287fe&0&UID4352"] = new() { Model = "WK95U", Brightness = 63 };
+            settings.Monitors["GSM780E#5&20e287fe&0&UID4352"] = new() { Model = "WK95U" }; settings.BrightnessLevel = 112.5;
             settings.Save(path);
             var json = File.ReadAllText(path);
             Assert.Contains("\"nightStart\": \"01:15\"", json);
@@ -343,7 +343,7 @@ public sealed class CoreTests
             Assert.Equal(settings.PeriodLevels.OrderBy(p => p.Key), loaded.PeriodLevels.OrderBy(p => p.Key));
             Assert.Equal(settings.Curves.OrderBy(p => p.Key), loaded.Curves.OrderBy(p => p.Key));
             var monitor = Assert.Single(loaded.Monitors);
-            Assert.Equal(("GSM780E#5&20e287fe&0&UID4352", "WK95U", 63), (monitor.Key, monitor.Value.Model, monitor.Value.Brightness));
+            Assert.Equal(("GSM780E#5&20e287fe&0&UID4352", "WK95U", 112.5), (monitor.Key, monitor.Value.Model, loaded.BrightnessLevel));
             File.WriteAllText(path, "{\"warmKelvin\":9000,\"dimPercent\":5}");
             loaded = Settings.Load(path);
             Assert.Equal((6500, 30, NightSchedule.Sunset), (loaded.WarmKelvin, loaded.DimPercent, loaded.WarmSchedule));
@@ -352,9 +352,12 @@ public sealed class CoreTests
             Assert.Equal(LevelId.Strong, loaded.PeriodLevels[Period.Day]);
             Assert.Equal(new(4, 82, 100, 100), loaded.Curves[LevelId.Gentle]);
             Assert.Equal(new(30, 30, 150, 50), loaded.Curves[LevelId.Balanced]);
-            File.WriteAllText(path, "{\"monitors\":{\"a\":{\"brightness\":140},\"b\":{\"brightness\":-5},\"c\":null,\"d\":{}}}");
+            File.WriteAllText(path, "{\"brightnessLevel\":400,\"monitors\":{\"c\":null,\"d\":{}}}");
             loaded = Settings.Load(path);
-            Assert.Equal(new int?[] { 100, 0, null, null }, new[] { "a", "b", "c", "d" }.Select(k => loaded.Monitors[k].Brightness));
+            Assert.Equal(180, loaded.BrightnessLevel);
+            Assert.All(new[] { "c", "d" }, k => Assert.NotNull(loaded.Monitors[k]));
+            File.WriteAllText(path, "{\"brightnessLevel\":-7}");
+            Assert.Equal(0, Settings.Load(path).BrightnessLevel);
             File.WriteAllText(path, "{\"monitors\":null}");
             Assert.Empty(Settings.Load(path).Monitors);
             File.WriteAllText(path, "{broken");
@@ -434,6 +437,43 @@ public sealed class CoreTests
         Assert.Equal(40, Hardware.Dimmed(50, 0.8));
         Assert.Equal(100, Hardware.Dimmed(100, 1.5));
         Assert.Equal(0, Hardware.Dimmed(50, -1));
+    }
+
+    // Guards the one-slider mapping at every band edge and that Join inverts Split.
+    [Theory]
+    [InlineData(0, 0, 50)]
+    [InlineData(25, 0, 75)]
+    [InlineData(50, 0, 100)]
+    [InlineData(100, 50, 100)]
+    [InlineData(150, 100, 100)]
+    [InlineData(165, 100, 115)]
+    [InlineData(180, 100, 130)]
+    [InlineData(-5, 0, 50)]
+    [InlineData(500, 100, 130)]
+    public void LevelSplitJoin(double level, int hardware, double ramp)
+    {
+        Assert.Equal((hardware, ramp), Level.Split(level));
+        double clamped = Math.Clamp(level, 0, Level.Max);
+        Assert.Equal(clamped, Level.Join(hardware, ramp));
+    }
+
+    [Theory]
+    [InlineData(0, 101, 50)]
+    [InlineData(0, 80, 30)]
+    [InlineData(100, 120, 170)]
+    [InlineData(40, 130, 90)]
+    [InlineData(100, 100, 150)]
+    [InlineData(0, 20, 0)]
+    [InlineData(100, 200, 180)]
+    public void LevelJoinAdoptsMonitorFirst(int hardware, double ramp, double level) => Assert.Equal(level, Level.Join(hardware, ramp));
+
+    [Fact]
+    public void LevelLabelsAndDim()
+    {
+        Assert.Equal("63%", Level.Label(113));
+        Assert.Equal("0% · ramp 75%", Level.Label(25));
+        Assert.Equal("100% · ramp 115%", Level.Label(165));
+        Assert.Equal(80, Level.Dim(160, 0.5));
     }
 
     // Guards that the dim scale used for the monitor is the same one Look applies to the ramp brightness.

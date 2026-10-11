@@ -53,6 +53,36 @@ public sealed record VcpCaps(string? Model, string? Mccs, IReadOnlyDictionary<by
     }
 }
 
+/// <summary>One brightness level for the whole display chain: ramp 50..100 % below the monitor's minimum, hardware 0..100 %, then ramp 100..130 % above its maximum.</summary>
+public static class Level
+{
+    public const int Below = 50, Span = 100, Above = 30, Max = Below + Span + Above;
+
+    public static (int Hardware, double Ramp) Split(double level)
+    {
+        level = Math.Clamp(level, 0, Max);
+        if (level < Below) return (0, Below + level);
+        if (level <= Below + Span) return ((int)Math.Round(level - Below, MidpointRounding.AwayFromZero), 100);
+        return (Span, 100 + level - (Below + Span));
+    }
+
+    public static double Join(int hardwarePercent, double ramp)
+    {
+        if (hardwarePercent <= 0 && ramp < 100) return Math.Max(ramp - Below, 0);
+        if (hardwarePercent >= Span && ramp > 100) return Math.Min(Below + Span + (ramp - 100), Max);
+        return Below + Math.Clamp(hardwarePercent, 0, Span);
+    }
+
+    public static string Label(double level)
+    {
+        var (hardware, ramp) = Split(level);
+        return level < Below ? $"0% · ramp {Math.Round(ramp)}%" : level > Below + Span ? $"100% · ramp {Math.Round(ramp)}%" : $"{hardware}%";
+    }
+
+    /// <summary>Dimming scales the one curve.</summary>
+    public static double Dim(double level, double dimScale) => level * dimScale;
+}
+
 /// <summary>Maps between percent and a monitor's raw VCP range.</summary>
 public static class Hardware
 {

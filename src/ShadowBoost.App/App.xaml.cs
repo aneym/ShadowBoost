@@ -18,19 +18,19 @@ public partial class App : Application
     internal Settings Settings = new();
     internal BoostEngine Engine = null!;
     internal EngineState State => Engine.State(DateTimeOffset.Now);
-    // With hardware brightness the ramp keeps warmth and boost at full brightness; dimming goes to the monitor instead.
-    internal Look Look { get { var look = Night.Look(DateTimeOffset.Now, Settings, TimeZoneInfo.Local); return HardwareBrightness ? look with { Brightness = 100 } : look; } }
+    // With hardware brightness the one level splits into the monitor's percent and the ramp's brightness.
+    internal Look Look { get { var look = Night.Look(DateTimeOffset.Now, Settings, TimeZoneInfo.Local); return HardwareBrightness ? look with { Brightness = Level.Split(EffectiveLevel(look)).Ramp } : look; } }
     internal bool Dry, Isolated, Dark;
     MonitorBus? bus;
     readonly Dictionary<string, int> sentRaw = new();
     int ticks;
     internal IReadOnlyList<MonitorInfo> Monitors => bus?.Monitors ?? Array.Empty<MonitorInfo>();
-    IEnumerable<MonitorInfo> HardwareMonitors => Monitors.Where(m => m.HasBrightness);
-    internal bool HardwareBrightness => HardwareMonitors.Any();
-    // The hardware slider shows the first monitor's saved percent; slice A sets every monitor alike.
-    internal int HardwarePercent => HardwareMonitors.Select(Saved).FirstOrDefault();
-    int Saved(MonitorInfo m) => Settings.Monitors.GetValueOrDefault(m.Key)?.Brightness ?? Hardware.ToPercent(m.Brightness!.Current!.Value, m.Brightness.Max);
-    internal double BrightnessShown(Look look) => HardwareBrightness ? Hardware.Dimmed(HardwarePercent, Night.DimScale(look.Dimming, Settings)) : Math.Round(look.Brightness);
+    // Hardware mode: every display answers DDC/CI brightness. Otherwise the ramp alone scales brightness, as before.
+    internal bool HardwareBrightness => Monitors.Count > 0 && Monitors.All(m => m.HasBrightness);
+    // Before the first adoption the level comes from the primary monitor's current value and the saved ramp brightness.
+    internal double SavedLevel => Settings.BrightnessLevel ?? Level.Join(Monitors.Count > 0 && Monitors[0].Brightness is { Current: int c } b ? Hardware.ToPercent(c, b.Max) : 0, Math.Clamp(Settings.UserBrightness, 50, 130));
+    double EffectiveLevel(Look look) => Level.Dim(SavedLevel, Night.DimScale(look.Dimming, Settings));
+    internal string BrightnessShown(Look look) => HardwareBrightness ? Level.Label(EffectiveLevel(look)) : $"{Math.Round(look.Brightness)}%";
     string lastSaved = "";
     internal event Action? Changed;
     string dataDir = "", settingsPath = "", statusPath = "", pipeName = "";
@@ -68,7 +68,7 @@ public partial class App : Application
             catch (Exception ex) { Trace.WriteLine(ex); Environment.ExitCode = 1; }
             Shutdown(); return;
         }
-        string[] commands = { "--on", "--off", "--level", "--schedule", "--show", "--flyout", "--quit", "--screenshot", "--night", "--warmth", "--brightness" };
+        string[] commands = { "--on", "--off", "--level", "--schedule", "--show", "--flyout", "--quit", "--screenshot", "--night", "--warmth", "--brightness", "--brightness-level" };
         if (e.Args.Any(commands.Contains))
         {
             Native.AttachConsole(uint.MaxValue);
@@ -138,7 +138,8 @@ public partial class App : Application
         if (args.Contains("--off")) Engine.TurnOff(DateTimeOffset.Now);
         if (Enum.TryParse<LevelId>(Value(args, "--level"), true, out var level)) Engine.SetLevel(level, DateTimeOffset.Now);
         if (int.TryParse(Value(args, "--warmth"), out var kelvin)) { Settings.WarmKelvin = kelvin; Settings.Normalize(); Save(); }
-        if (int.TryParse(Value(args, "--brightness"), out var percent)) { if (HardwareBrightness) SetHardware(percent); else Settings.UserBrightness = percent; Settings.Normalize(); Save(); }
+        if (int.TryParse(Value(args, "--brightness"), out var percent)) { if (HardwareBrightness) Settings.BrightnessLevel = Level.Below + Math.Clamp(percent, 0, Level.Span); else Settings.UserBrightness = percent; Settings.Normalize(); Save(); }
+        if (double.TryParse(Value(args, "--brightness-level"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var levelValue) && double.IsFinite(levelValue)) { Settings.BrightnessLevel = levelValue; Settings.Normalize(); Save(); }
         switch (Value(args, "--night"))
         {
             case "on": if (!Look.Warmth.On) ToggleWarm(); break;
@@ -159,8 +160,7 @@ public partial class App : Application
     void ExpireHold() { if (Settings.WarmHold is { } hold && DateTimeOffset.Now >= hold.Until) { Settings.WarmHold = null; Save(); } }
     // Slider drags apply the ramp at once and write settings once the drag settles.
     internal void SetUserBrightness(int value) { Settings.UserBrightness = Math.Clamp(value,50,130); Live(); }
-    internal void SetHardwareBrightness(int percent) { SetHardware(percent); Live(); }
-    void SetHardware(int percent) { foreach (var m in HardwareMonitors) Entry(m).Brightness = Math.Clamp(percent, 0, 100); }
+    internal void SetBrightnessLevel(int level) { Settings.BrightnessLevel = Math.Clamp(level, 0, Level.Max); Live(); }
     MonitorSettings Entry(MonitorInfo m)
     {
         if (!Settings.Monitors.TryGetValue(m.Key, out var entry)) Settings.Monitors[m.Key] = entry = new();
@@ -181,36 +181,37 @@ public partial class App : Application
     // Applies the composed ramp and the monitor brightness without rebuilding views, for slider drags.
     void Apply() { Push(State.AppliedCurve, Look, false); ApplyHardware(); }
     void RefreshBus() => bus?.Refresh(() => Dispatcher.BeginInvoke(() => BusRefreshed()));
-    // After every bus refresh: adopt a monitor's current brightness the first time (no write, so installing never changes his display), then apply the saved values.
+    // After every bus refresh: the first time, adopt the monitor's current brightness as the saved level (no write, so installing never changes the display); then apply the saved level.
     void BusRefreshed()
     {
         if (quitting) return;
-        sentRaw.Clear(); bool adopted = false;
-        foreach (var m in HardwareMonitors)
+        sentRaw.Clear();
+        if (HardwareBrightness)
         {
-            var entry = Entry(m);
-            if (entry.Brightness == null) { entry.Brightness = Hardware.ToPercent(m.Brightness!.Current!.Value, m.Brightness.Max); sentRaw[m.Key] = m.Brightness.Current.Value; adopted = true; }
+            foreach (var m in Monitors) Entry(m);
+            if (Settings.BrightnessLevel == null) { Settings.BrightnessLevel = SavedLevel; foreach (var m in Monitors) sentRaw[m.Key] = m.Brightness!.Current!.Value; Save(); return; }
         }
-        if (adopted) Save(); else Refresh(true);
+        Refresh(true);
     }
     static bool SameRaw(int a, int b, int max) => a == b || Hardware.ToPercent(a, max) == Hardware.ToPercent(b, max);
-    // Writes the saved percent, dimmed, to each monitor whose target changed.
+    // Writes the hardware part of the effective level to each monitor whose target changed.
     void ApplyHardware()
     {
-        if (bus == null) return;
-        double scale = Night.DimScale(Night.Look(DateTimeOffset.Now, Settings, TimeZoneInfo.Local).Dimming, Settings);
-        foreach (var m in HardwareMonitors)
+        if (bus == null || !HardwareBrightness) return;
+        int percent = Level.Split(EffectiveLevel(Look)).Hardware;
+        foreach (var m in Monitors)
         {
-            int max = m.Brightness!.Max, raw = Hardware.ToRaw(Hardware.Dimmed(Saved(m), scale), max);
+            int max = m.Brightness!.Max, raw = Hardware.ToRaw(percent, max);
             if (sentRaw.TryGetValue(m.Key, out var last) && SameRaw(last, raw, max)) continue;
             sentRaw[m.Key] = raw; bus.Set(m.Key, 0x10, raw);
         }
     }
-    // Every 30 s: a monitor that no longer holds what we sent was changed with its own buttons, so keep that value as the saved one.
+    // Every 30 s: retry the bus while any display lacks DDC/CI; otherwise a monitor that no longer holds what we sent was changed with its own buttons.
     void PollMonitors()
     {
         if (bus == null) return;
-        foreach (var m in HardwareMonitors)
+        if (!HardwareBrightness) { RefreshBus(); return; }
+        foreach (var m in Monitors)
         {
             string key = m.Key; int? sent = sentRaw.TryGetValue(key, out var s) ? s : null;
             bus.Read(key, 0x10, v => Dispatcher.BeginInvoke(() => Adopt(key, sent, v)));
@@ -218,11 +219,10 @@ public partial class App : Application
     }
     void Adopt(string key, int? sentAtRead, VcpValue v)
     {
-        if (bus == null || quitting || v.Current is not int now || v.Max <= 0) return;
+        if (bus == null || quitting || !HardwareBrightness || v.Error != null || v.Current is not int now || v.Max <= 0) return;
         if (!sentRaw.TryGetValue(key, out var sent) || sentAtRead != sent || bus.Busy(key) || SameRaw(sent, now, v.Max)) return;
-        double scale = Night.DimScale(Look.Dimming, Settings);
-        var monitor = Monitors.FirstOrDefault(m => m.Key == key); if (monitor == null) return;
-        Entry(monitor).Brightness = Math.Clamp((int)Math.Round(Hardware.ToPercent(now, v.Max) / (scale > 0 ? scale : 1), MidpointRounding.AwayFromZero), 0, 100);
+        double scale = Night.DimScale(Look.Dimming, Settings), ramp = Level.Split(Level.Dim(SavedLevel, scale)).Ramp;
+        Settings.BrightnessLevel = Math.Clamp(Level.Join(Hardware.ToPercent(now, v.Max), ramp) / (scale > 0 ? scale : 1), 0, Level.Max);
         sentRaw[key] = now; Save();
     }
     // Sets the ramp for this look. When Windows refuses it, keep brightness and boost and search for the
@@ -265,9 +265,9 @@ public partial class App : Application
         File.WriteAllText(tmp, JsonSerializer.Serialize(new { pid = Environment.ProcessId, exePath = exe, dataDir, updatedAt = DateTimeOffset.Now, dryGamma = Dry, state.Enabled, state.Period, state.ScheduledLevel, state.ActiveLevel, state.IsOverride, state.NextChange, state.AppliedCurve, userBrightness = Settings.UserBrightness,
             warm = new { on = look.Warmth.On, factor = Math.Round(look.Warmth.Factor, 3), kelvin = look.Kelvin, appliedKelvin = AppliedKelvin, target = Settings.WarmKelvin, held = look.Warmth.Held, nextChange = look.Warmth.NextChange, schedule = Settings.WarmSchedule },
             dim = new { on = look.Dimming.On, factor = Math.Round(look.Dimming.Factor, 3), percent = Settings.DimPercent, schedule = Settings.DimSchedule, nextChange = look.Dimming.NextChange },
-            brightness = Math.Round(look.Brightness, 2), brightnessSource = HardwareBrightness ? "monitor" : "gamma",
+            brightness = Math.Round(look.Brightness, 2), brightnessSource = HardwareBrightness ? "monitor" : "gamma", brightnessLevel = Settings.BrightnessLevel, effectiveLevel = HardwareBrightness ? EffectiveLevel(look) : (double?)null, rampBrightness = Math.Round(look.Brightness, 2),
             monitors = Monitors.Select(m => new { m.Key, m.Description, m.Model, m.Mccs, codes = string.Join(" ", m.Caps.Codes.Keys.Order().Select(c => c.ToString("X2"))),
-                brightness = new { percent = Settings.Monitors.GetValueOrDefault(m.Key)?.Brightness, target = m.Brightness?.Target, current = m.Brightness?.Current, max = m.Brightness?.Max, readback = m.Brightness?.Readback, error = m.Brightness?.Error } }).ToList(),
+                brightness = new { target = m.Brightness?.Target, current = m.Brightness?.Current, max = m.Brightness?.Max, readback = m.Brightness?.Readback, error = m.Brightness?.Error } }).ToList(),
             expectedMid = new[] { expected.Red[128], expected.Green[128], expected.Blue[128] },
             rampMid = Dry ? null : Native.RampMid(), rampCheck, runKey = RunValue(), trayPinned = PinValue() }, Json));
         File.Move(tmp, statusPath, true);
@@ -307,7 +307,7 @@ public partial class App : Application
         string warm = look.Warmth.On ? $"Warm {look.Kelvin} K" : "Daylight";
         string boost = s.Enabled ? $", boost {s.ActiveLevel}" : "";
         // NotifyIcon text is limited to 127 characters.
-        var text = $"ShadowBoost: {warm}{boost}, brightness {BrightnessShown(look)}%"; tray.Text = text.Length > 127 ? text[..127] : text;
+        var text = $"ShadowBoost: {warm}{boost}, brightness {BrightnessShown(look)}"; tray.Text = text.Length > 127 ? text[..127] : text;
     }
     void Menu()
     {

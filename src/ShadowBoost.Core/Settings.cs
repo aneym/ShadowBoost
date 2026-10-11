@@ -8,11 +8,10 @@ public enum LevelId { Gentle, Balanced, Strong }
 public enum Period { Day, Evening, Night }
 public sealed record Curve(int BlackLift, int Gamma, int Contrast, int Brightness);
 
-/// <summary>Saved hardware (DDC/CI) state of one monitor; Brightness is percent 0..100 of its hardware range.</summary>
+/// <summary>Saved hardware (DDC/CI) facts about one monitor.</summary>
 public sealed class MonitorSettings
 {
     public string? Model { get; set; }
-    public int? Brightness { get; set; }
 }
 
 public sealed class Settings
@@ -38,6 +37,8 @@ public sealed class Settings
     public int UserBrightness { get; set; } = 100;
     // Legacy: still loaded and saved, no longer used by the app.
     public int? MonitorBrightness { get; set; }
+    /// <summary>The one brightness slider, 0..180 (see <see cref="Level"/>); null until first adopted from the monitor.</summary>
+    public double? BrightnessLevel { get; set; }
     public Dictionary<string, MonitorSettings> Monitors { get; set; } = new();
     public bool TrayPinApplied { get; set; }
     public NightSchedule WarmSchedule { get; set; } = NightSchedule.Sunset;
@@ -133,12 +134,10 @@ public sealed class Settings
         if (!Enum.IsDefined(WarmSchedule)) WarmSchedule = NightSchedule.Sunset;
         if (!Enum.IsDefined(DimSchedule)) DimSchedule = NightSchedule.Off;
         if (MonitorBrightness.HasValue) MonitorBrightness = Math.Clamp(MonitorBrightness.Value, 0, 100);
+        if (BrightnessLevel.HasValue) BrightnessLevel = double.IsFinite(BrightnessLevel.Value) ? Math.Clamp(BrightnessLevel.Value, 0, Level.Max) : null;
         Monitors ??= new();
         foreach (var (key, monitor) in Monitors.ToList())
-        {
-            if (monitor == null) { Monitors[key] = new(); continue; }
-            if (monitor.Brightness.HasValue) monitor.Brightness = Math.Clamp(monitor.Brightness.Value, 0, 100);
-        }
+            if (monitor == null) Monitors[key] = new();
     }
 
     private sealed class ClockConverter : JsonConverter<TimeOnly>
