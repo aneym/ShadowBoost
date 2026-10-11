@@ -10,7 +10,7 @@ function Await([string]$what, [scriptblock]$ok) { $until = (Get-Date).AddSeconds
 $fails = 0
 function Leg([string]$name, [string[]]$a, [scriptblock]$ok, [byte[]]$codes) {
     App $a; try { $m = Await $name $ok; $r = 'PASS' } catch { $m = Mon; $r = 'FAIL'; $script:fails++ }
-    $line = "$r $name app=$(ConvertTo-Json -Compress -Depth 6 $m)"; Write-Output $line; Add-Content (Join-Path $evidence 'hwcheck.log') $line; Vcp $name $codes
+    $top = Top; $line = "$r $name level=$($top.brightnessLevel) effective=$($top.effectiveLevel) ramp=$($top.rampBrightness) app=$(ConvertTo-Json -Compress -Depth 6 $m)"; Write-Output $line; Add-Content (Join-Path $evidence 'hwcheck.log') $line; Vcp $name $codes
 }
 if (-not (Get-Process ShadowBoost -ErrorAction SilentlyContinue)) { throw 'installed ShadowBoost is not running' }
 Copy-Item $settingsFile (Join-Path $evidence 'settings-before.json'); Copy-Item $status (Join-Path $evidence 'status-before.json')
@@ -18,10 +18,13 @@ $before = Mon; if (-not $before) { throw 'status has no hardware monitor' }
 Write-Output "monitor: $($before.model) key=$($before.key) mccs=$($before.mccs) codes=$($before.codes)"
 Vcp 'before' @(0x10, 0x12, 0x14, 0x16, 0x18, 0x1A, 0x0C, 0x72)
 $saved = Get-Content $settingsFile -Raw | ConvertFrom-Json
-$b0 = $before.brightness.percent
+$b0 = (Get-Content $status -Raw | ConvertFrom-Json).brightnessLevel; if ($null -eq $b0) { throw 'status has no brightnessLevel' }
+function Top { Get-Content $status -Raw | ConvertFrom-Json }
 try {
     Leg 'brightness-min' @('--brightness', '0') { param($m) $m.brightness.readback -eq 0 } @(0x10)
     Leg 'brightness-max' @('--brightness', '100') { param($m) $m.brightness.readback -eq $m.brightness.max } @(0x10)
+    Leg 'level-0-ramp-below' @('--brightness-level', '0') { param($m) $m.brightness.readback -eq 0 -and (Top).rampBrightness -eq 50 } @(0x10)
+    Leg 'level-180-ramp-above' @('--brightness-level', '180') { param($m) $m.brightness.readback -eq $m.brightness.max -and (Top).rampBrightness -eq 130 } @(0x10)
     if ($null -ne $before.contrast) {
         $c0 = $before.contrast.percent
         Leg 'contrast-min' @('--contrast', '0') { param($m) $m.contrast.readback -eq 0 } @(0x12)
@@ -35,7 +38,7 @@ try {
     # Restore: his saved warmth target and schedule hold, then his hardware values.
     App @('--warmth', "$($saved.warmKelvin)"); App @('--night', 'schedule'); if ($saved.warmHold) { Copy-Item (Join-Path $evidence 'settings-before.json') $settingsFile -Force; Start-Sleep -Seconds 2 }
     if ($null -ne $before.contrast) { App @('--contrast', "$c0") }
-    App @('--brightness', "$b0"); Start-Sleep -Seconds 3
+    App @('--brightness-level', "$b0"); Start-Sleep -Seconds 3
     Vcp 'restored' @(0x10, 0x12, 0x14, 0x16, 0x18, 0x1A, 0x0C, 0x72)
     Copy-Item $status (Join-Path $evidence 'status-after.json'); Copy-Item $settingsFile (Join-Path $evidence 'settings-after.json')
 }
