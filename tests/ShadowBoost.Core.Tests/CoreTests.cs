@@ -115,21 +115,109 @@ public sealed class CoreTests
         if (nightHour == 18) Assert.DoesNotContain(slots, slot => slot.Period == Period.Evening);
     }
 
-    // Guards independent brightness composition without changing boost scheduling.
+    // Guards per-channel composition: neutral identity, brightness scaling, and warm white points
+    // (red kept, green then blue cut, each channel monotonic) against Helland/redshift reference gains.
     [Theory]
-    [InlineData(false, 100)]
-    [InlineData(false, 80)]
-    [InlineData(true, 100)]
-    public void ComposeBrightness(bool boosted, int brightness)
+    [InlineData(false, 100, 6500, 1.0, 1.0, 1.0)]
+    [InlineData(false, 80, 6500, 0.8, 0.8, 0.8)]
+    [InlineData(true, 100, 6500, 1.0, 1.0, 1.0)]
+    [InlineData(false, 100, 3400, 1.0, 0.75, 0.54)]
+    [InlineData(false, 100, 2700, 1.0, 0.66, 0.35)]
+    [InlineData(false, 50, 2700, 0.5, 0.33, 0.175)]
+    public void ComposeChannels(bool boosted, int brightness, int kelvin, double red, double green, double blue)
     {
         Curve? curve = boosted ? new Settings().Curves[LevelId.Balanced] : null;
-        var ramp = GammaRamp.Compose(curve, brightness);
-        if (brightness == 100) Assert.Equal(curve == null ? GammaRamp.Identity() : GammaRamp.Build(curve), ramp);
+        var ramp = GammaRamp.Compose(curve, brightness, kelvin);
+        if (boosted) Assert.Equal(GammaRamp.Build(curve!), ramp.Red);
         else
         {
-            Assert.InRange((int)ramp[255], 52427, 52429);
-            for (int i = 1; i < ramp.Length; i++) Assert.True(ramp[i] >= ramp[i - 1]);
+            Assert.InRange(ramp.Red[255] / 65535.0, red - 0.02, red + 0.02);
+            Assert.InRange(ramp.Green[255] / 65535.0, green - 0.02, green + 0.02);
+            Assert.InRange(ramp.Blue[255] / 65535.0, blue - 0.02, blue + 0.02);
         }
+        Assert.Equal(!boosted && brightness == 100 && kelvin == 6500, ramp.IsIdentity);
+        foreach (var channel in new[] { ramp.Red, ramp.Green, ramp.Blue })
+            for (int i = 1; i < channel.Length; i++) Assert.True(channel[i] >= channel[i - 1]);
+        for (int i = 0; i < 256; i++) Assert.True(ramp.Red[i] >= ramp.Green[i] && ramp.Green[i] >= ramp.Blue[i]);
+    }
+
+    // Guards the night windows: sunset to sunrise, custom hours across midnight, empty custom hours,
+    // fades at both ends, and the next change reported for the tray copy.
+    [Theory]
+    [InlineData("Sunset", 21, 0, 23, 0, 1.0, "next-rise")]
+    [InlineData("Sunset", 12, 0, 23, 0, 0.0, "today-set")]
+    [InlineData("Sunset", 20, 41, 23, 0, 0.5, "next-rise")]
+    [InlineData("Sunset", 5, 15, 23, 0, 0.5, "today-rise")]
+    [InlineData("Custom", 2, 0, 23, 0, 1.0, "07:00")]
+    [InlineData("Custom", 22, 0, 23, 0, 0.0, "23:00")]
+    [InlineData("Custom", 23, 10, 23, 0, 0.5, "07:00")]
+    [InlineData("Custom", 12, 0, 7, 0, 0.0, "never")]
+    [InlineData("Off", 23, 30, 23, 0, 0.0, "never")]
+    public void NightWindowsAndFades(string schedule, int hour, int minute, int fromHour, int fromMinute, double factor, string next)
+    {
+        var settings = new Settings
+        {
+            WarmSchedule = Enum.Parse<NightSchedule>(schedule), WarmFrom = new(fromHour, fromMinute), WarmTo = new(7, 0), FadeMinutes = 20
+        };
+        var now = June(hour, minute);
+        var state = Night.State(now, settings, NightKind.Warmth, Ny);
+        Assert.InRange(state.Factor, factor - 0.05, factor + 0.05);
+        Assert.False(state.Held);
+        var (rise, set) = SunTimes.For(new(2026, 6, 21), 40.7128, -74.0060, Ny);
+        var (nextRise, _) = SunTimes.For(new(2026, 6, 22), 40.7128, -74.0060, Ny);
+        DateTimeOffset expected = next switch
+        {
+            "next-rise" => nextRise!.Value, "today-set" => set!.Value, "today-rise" => rise!.Value,
+            "never" => DateTimeOffset.MaxValue,
+            _ => June(int.Parse(next[..2]), int.Parse(next[3..])) is var t && t <= now ? t.AddDays(1) : June(int.Parse(next[..2]), int.Parse(next[3..]))
+        };
+        Assert.Equal(expected, state.NextChange);
+    }
+
+    // Guards the quick toggle: on in daylight holds until the next morning, off at night holds until
+    // the window ends, a second press clears the hold, and with no schedule it holds to the morning time.
+    [Fact]
+    public void QuickToggleHoldsUntilNextChange()
+    {
+        var settings = new Settings();
+        var noon = June(12);
+        var hold = Night.Toggle(noon, settings, Ny)!;
+        Assert.True(hold.On);
+        settings.WarmHold = hold;
+        var (nextRise, _) = SunTimes.For(new(2026, 6, 22), 40.7128, -74.0060, Ny);
+        Assert.Equal(nextRise!.Value, hold.Until);
+        Assert.Equal(3400, Night.Look(noon, settings, Ny).Kelvin);
+        Assert.Null(Night.Toggle(noon, settings, Ny));
+
+        settings.WarmHold = null;
+        var night = June(23);
+        hold = Night.Toggle(night, settings, Ny)!;
+        Assert.False(hold.On);
+        Assert.Equal(nextRise.Value, hold.Until);
+        settings.WarmHold = hold;
+        Assert.Equal(6500, Night.Look(night, settings, Ny).Kelvin);
+        Assert.Equal(6500, Night.Look(hold.Until.AddMinutes(1), settings, Ny).Kelvin);
+        Assert.Equal(3400, Night.Look(June(22).AddDays(1), settings, Ny).Kelvin); // expired hold: schedule resumes
+
+        settings.WarmHold = null;
+        settings.WarmSchedule = NightSchedule.Off;
+        hold = Night.Toggle(night, settings, Ny)!;
+        Assert.True(hold.On);
+        Assert.Equal(June(7).AddDays(1), hold.Until);
+    }
+
+    // Guards that dimming multiplies the saved brightness on its own schedule and never rewrites it.
+    [Fact]
+    public void LookCombinesWarmthAndDimming()
+    {
+        var settings = new Settings { UserBrightness = 54, DimSchedule = NightSchedule.Custom, DimPercent = 80, FadeMinutes = 0 };
+        var look = Night.Look(June(2), settings, Ny);
+        Assert.Equal(3400, look.Kelvin);
+        Assert.Equal(54 * 0.8, look.Brightness, 6);
+        Assert.Equal(54, settings.UserBrightness);
+        look = Night.Look(June(12), settings, Ny);
+        Assert.Equal(6500, look.Kelvin);
+        Assert.Equal(54, look.Brightness, 6);
     }
 
     // Guards disabled startup, scheduled activation, override expiry, and one-shot boundary reporting.
@@ -230,7 +318,9 @@ public sealed class CoreTests
             var settings = new Settings
             {
                 Latitude = 51.5, Longitude = -0.12, PlaceName = "London", NightStart = new(1, 15),
-                StartAtSignIn = false, MonitorBrightness = 84, TrayPinApplied = true
+                StartAtSignIn = false, MonitorBrightness = 84, TrayPinApplied = true,
+                WarmSchedule = NightSchedule.Custom, WarmFrom = new(20, 30), WarmKelvin = 2900, DimSchedule = NightSchedule.Sunset,
+                DimPercent = 65, FadeMinutes = 60, WarmHold = new(true, June(7).AddDays(1))
             };
             settings.PeriodLevels[Period.Day] = LevelId.Gentle;
             settings.Curves[LevelId.Balanced] = new(9, 80, 117, 100);
@@ -246,8 +336,14 @@ public sealed class CoreTests
             Assert.Equal(settings.StartAtSignIn, loaded.StartAtSignIn);
             Assert.Equal(settings.MonitorBrightness, loaded.MonitorBrightness);
             Assert.Equal(settings.TrayPinApplied, loaded.TrayPinApplied);
+            Assert.Equal((settings.WarmSchedule, settings.WarmFrom, settings.WarmKelvin, settings.DimSchedule, settings.DimPercent, settings.FadeMinutes),
+                (loaded.WarmSchedule, loaded.WarmFrom, loaded.WarmKelvin, loaded.DimSchedule, loaded.DimPercent, loaded.FadeMinutes));
+            Assert.Equal(settings.WarmHold, loaded.WarmHold);
             Assert.Equal(settings.PeriodLevels.OrderBy(p => p.Key), loaded.PeriodLevels.OrderBy(p => p.Key));
             Assert.Equal(settings.Curves.OrderBy(p => p.Key), loaded.Curves.OrderBy(p => p.Key));
+            File.WriteAllText(path, "{\"warmKelvin\":9000,\"dimPercent\":5}");
+            loaded = Settings.Load(path);
+            Assert.Equal((6500, 30, NightSchedule.Sunset), (loaded.WarmKelvin, loaded.DimPercent, loaded.WarmSchedule));
             File.WriteAllText(path, "{\"periodLevels\":{},\"curves\":{\"Balanced\":{\"blackLift\":99,\"gamma\":0,\"contrast\":200,\"brightness\":0}}}");
             loaded = Settings.Load(path);
             Assert.Equal(LevelId.Strong, loaded.PeriodLevels[Period.Day]);

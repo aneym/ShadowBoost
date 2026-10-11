@@ -16,4 +16,8 @@
   <SolidColorBrush x:Key="Evening" Color="#C47C4A"/>
   <SolidColorBrush x:Key="Night" Color="#5A63A0"/>
   <SolidColorBrush x:Key="SwitchOff" Color="#9A9A9A"/>
+  <SolidColorBrush x:Key="Warm" Color="#E08A3C"/>
+  <SolidColorBrush x:Key="WarmBand" Color="#B97A45"/>
+  <SolidColorBrush x:Key="DimBand" Color="#5A63A0"/>
+  <LinearGradientBrush x:Key="WarmTrack" StartPoint="0,0" EndPoint="1,0"><GradientStop Color="#4A5260" Offset="0"/><GradientStop Color="#E08A3C" Offset="1"/></LinearGradientBrush>
 </ResourceDictionary>

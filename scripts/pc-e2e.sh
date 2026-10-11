@@ -53,7 +53,7 @@ $leg='L1'
 try {
     $now=Get-Date
     $evening=$now.Date.AddHours($now.Hour).AddMinutes($now.Minute+2)
-    $settings=@{followSun=$false;dayStart=$now.AddHours(-2).ToString('HH:mm');eveningStart=$evening.ToString('HH:mm');nightStart=$now.AddHours(3).ToString('HH:mm');userBrightness=85;periodLevels=@{Day='Strong';Evening='Balanced';Night='Gentle'}}
+    $settings=@{warmSchedule='Off';followSun=$false;dayStart=$now.AddHours(-2).ToString('HH:mm');eveningStart=$evening.ToString('HH:mm');nightStart=$now.AddHours(3).ToString('HH:mm');userBrightness=85;periodLevels=@{Day='Strong';Evening='Balanced';Night='Gentle'}}
     $settings | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $homeDir 'settings.json') -Encoding UTF8
     $s=Start-App
     Write-Output ('Launch path: '+$launchMode)
@@ -66,9 +66,9 @@ try {
     Write-Output 'PASS L3 gentle: override held until eveningStart'
     $leg='L4'; Command @('--screenshot',('"'+(Join-Path $homeDir 'shots')+'"'))
     $shotDeadline=(Get-Date).AddSeconds(20)
-    do { $shots=@(Get-ChildItem (Join-Path $homeDir 'shots') -Filter '*.png' -ErrorAction SilentlyContinue); if ($shots.Count -eq 14) { break }; Start-Sleep -Milliseconds 300 } while ((Get-Date) -lt $shotDeadline)
-    if ($shots.Count -ne 14 -or @($shots | Where-Object Length -eq 0).Count) { throw "expected 14 nonempty PNGs, got $($shots.Count)" }
-    Write-Output 'PASS L4 screenshots: 14 nonempty PNGs'
+    do { $shots=@(Get-ChildItem (Join-Path $homeDir 'shots') -Filter '*.png' -ErrorAction SilentlyContinue); if ($shots.Count -eq 18) { break }; Start-Sleep -Milliseconds 300 } while ((Get-Date) -lt $shotDeadline)
+    if ($shots.Count -ne 18 -or @($shots | Where-Object Length -eq 0).Count) { throw "expected 18 nonempty PNGs, got $($shots.Count)" }
+    Write-Output 'PASS L4 screenshots: 18 nonempty PNGs'
     Write-Output ('SHOTS='+$homeDir.Replace('\','/')+'/shots')
     $leg='L4b'
     $fixedHome=$homeDir; $fixedStatus=$statusFile; $fixedPid=$ownedPid
@@ -81,10 +81,10 @@ try {
         if ($s.enabled -or -not $s.dryGamma -or $s.dataDir -ne $homeDir) { throw 'solar instance not isolated/off/dry' }
         Command @('--screenshot',('"'+(Join-Path $homeDir 'shots')+'"'))
         $shotDeadline=(Get-Date).AddSeconds(20)
-        do { $shots=@(Get-ChildItem (Join-Path $homeDir 'shots') -Filter '*.png' -ErrorAction SilentlyContinue); if ($shots.Count -eq 14) { break }; Start-Sleep -Milliseconds 300 } while ((Get-Date) -lt $shotDeadline)
-        if ($shots.Count -ne 14 -or @($shots | Where-Object Length -eq 0).Count) { throw 'solar screenshots incomplete' }
+        do { $shots=@(Get-ChildItem (Join-Path $homeDir 'shots') -Filter '*.png' -ErrorAction SilentlyContinue); if ($shots.Count -eq 18) { break }; Start-Sleep -Milliseconds 300 } while ((Get-Date) -lt $shotDeadline)
+        if ($shots.Count -ne 18 -or @($shots | Where-Object Length -eq 0).Count) { throw 'solar screenshots incomplete' }
         Write-Output ('Solar launch path: '+$launchMode)
-        Write-Output 'PASS L4b solar screenshots: isolated New York, 14 nonempty PNGs'
+        Write-Output 'PASS L4b solar screenshots: isolated New York, 18 nonempty PNGs'
         Write-Output ('SUNSHOTS='+$homeDir.Replace('\','/')+'/shots')
     } finally {
         Cleanup
@@ -115,6 +115,32 @@ try {
     $leg='L10'
     if ($s.userBrightness -ne 85 -or $s.enabled) { throw 'brightness did not survive disabled restart' }
     Write-Output 'PASS L10 brightness: 85 persisted through boundary and disabled restart'
+    Cleanup
+    # Warmth and dimming on a fresh isolated home whose custom windows hold the current minute.
+    $homeDir=Join-Path $env:TEMP ('sb-warm-e2e-'+[guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory $homeDir | Out-Null
+    $statusFile=Join-Path $homeDir 'status.json'; $settingsFile=Join-Path $homeDir 'settings.json'
+    $now=Get-Date; $from=$now.AddHours(-1).ToString('HH:mm'); $to=$now.AddHours(2).ToString('HH:mm')
+    @{warmSchedule='Custom';warmFrom=$from;warmTo=$to;warmKelvin=3400;dimSchedule='Custom';dimFrom=$from;dimTo=$to;dimPercent=50;fadeMinutes=0;userBrightness=80} | ConvertTo-Json | Set-Content $settingsFile -Encoding UTF8
+    $leg='W1'; $s=Start-App; $ownedPid=[int]$s.pid
+    if ($s.enabled -or -not $s.warm.on -or $s.warm.kelvin -ne 3400 -or $s.brightness -ne 40) { throw "start: enabled=$($s.enabled) warm=$($s.warm.on) kelvin=$($s.warm.kelvin) brightness=$($s.brightness)" }
+    $m=$s.expectedMid; if (-not ($m[0] -gt $m[1] -and $m[1] -gt $m[2]) -or [Math]::Abs($m[0]-[int](32896*0.4)) -gt 2) { throw "ramp not warm and dimmed: $($m -join ',')" }
+    Write-Output "PASS W1 start: boost off, warm 3400 K, dimmed to 40% (80 x 50%), ramp mid R,G,B=$($m -join ',')"
+    $leg='W2'; Command @('--night','off'); $s=Wait-State { param($s) -not $s.warm.on -and $s.warm.held }
+    if ($s.warm.kelvin -ne 6500 -or $s.brightness -ne 40) { throw 'quick toggle changed dimming or kept warmth' }
+    $hold=(Get-Content $settingsFile -Raw | ConvertFrom-Json).warmHold; if (-not $hold -or $hold.on) { throw 'hold not persisted' }
+    Write-Output "PASS W2 quick toggle off: 6500 K, held until $($s.warm.nextChange), dimming kept, hold saved"
+    $leg='W3'; Cleanup; $s=Start-App; $ownedPid=[int]$s.pid
+    if ($s.warm.on -or -not $s.warm.held) { throw 'hold lost across restart' }
+    Command @('--night','schedule'); $s=Wait-State { param($s) $s.warm.on -and -not $s.warm.held }
+    Write-Output 'PASS W3 restart keeps the hold; back to schedule warms again'
+    $leg='W4'; Command @('--warmth','2700'); $s=Wait-State { param($s) $s.warm.kelvin -eq 2700 }
+    if ((Get-Content $settingsFile -Raw | ConvertFrom-Json).warmKelvin -ne 2700) { throw 'warmth not saved' }
+    Cleanup; $s=Start-App; $ownedPid=[int]$s.pid; if ($s.warm.kelvin -ne 2700) { throw 'warmth lost across restart' }
+    Write-Output "PASS W4 warmth 2700 K saved and restored, ramp mid R,G,B=$($s.expectedMid -join ',')"
+    $leg='W5'; Command @('--brightness','60'); $s=Wait-State { param($s) $s.userBrightness -eq 60 -and $s.brightness -eq 30 }
+    if ((Get-Content $settingsFile -Raw | ConvertFrom-Json).userBrightness -ne 60) { throw 'brightness not saved' }
+    Write-Output 'PASS W5 brightness 60 saved; dimming multiplies it to 30 without rewriting it'
     Cleanup
 } catch { Write-Output "FAIL $leg`: $($_.Exception.Message)"; exit 1 }
 finally { Cleanup }

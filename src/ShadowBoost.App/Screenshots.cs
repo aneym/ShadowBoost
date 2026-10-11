@@ -30,23 +30,31 @@ internal static class Glyph
 }
 internal static class Screenshots
 {
+    // Renders hidden views to PNG without opening a window: 7 views per theme plus 2 tray glyphs per theme (18 files).
     internal static void Save(App app,string directory)
     {
         Directory.CreateDirectory(directory); bool original=app.Dark;
         try
         {
+            var now=DateTimeOffset.Now; var tz=TimeZoneInfo.Local; var s=app.State; var look=app.Look;
+            var window=Night.CurrentOrNext(now,app.Settings,NightKind.Warmth,tz);
+            // Fixed night and day states, so the warm and daylight flyouts render at any hour.
+            var warm=look with { Warmth=new NightState(1,false,window,window?.End ?? now.AddHours(8)), Kelvin=app.Settings.WarmKelvin };
+            var day=look with { Warmth=new NightState(0,false,window,window?.Start ?? now.AddHours(8)), Kelvin=Night.NeutralKelvin };
+            var off=s with { Enabled=false,IsOverride=false,AppliedCurve=null };
+            var boosted=s with { Enabled=true,IsOverride=false,ActiveLevel=s.ScheduledLevel,AppliedCurve=app.Settings.Curves[s.ScheduledLevel] };
             foreach (bool dark in new[] { false,true })
             {
                 app.ApplyTheme(dark); string theme=dark ? "dark" : "light";
-                Render(new FlyoutView(app, app.State),System.IO.Path.Combine(directory,$"flyout-{theme}.png"));
-                Render(new MainView(app, false),System.IO.Path.Combine(directory,$"main-{theme}.png"));
-                Render(new FineTuneView(app),System.IO.Path.Combine(directory,$"finetune-{theme}.png"));
-                // The brief requests 14 PNGs although its six view/four glyph names total ten.
-                // Include the two other flyout states per theme without changing the real engine.
-                var s=app.State;
-                Render(new FlyoutView(app,s with { Enabled=false,IsOverride=false,AppliedCurve=null }),System.IO.Path.Combine(directory,$"flyout-off-{theme}.png"));
-                Render(new FlyoutView(app,s with { Enabled=true,IsOverride=false,ActiveLevel=s.ScheduledLevel,AppliedCurve=app.Settings.Curves[s.ScheduledLevel] }),System.IO.Path.Combine(directory,$"flyout-schedule-{theme}.png"));
-                foreach (bool on in new[] { false,true }) { using var image=Glyph.Bitmap(on,dark,32); image.Save(System.IO.Path.Combine(directory,$"tray-{(on ? "on" : "off")}-{theme}.png"),Drawing.Imaging.ImageFormat.Png); }
+                string Path(string name)=>System.IO.Path.Combine(directory,$"{name}-{theme}.png");
+                Render(new FlyoutView(app,new Snapshot(s,look)),Path("flyout"));
+                Render(new FlyoutView(app,new Snapshot(off,warm)),Path("flyout-warm"));
+                Render(new FlyoutView(app,new Snapshot(off,day)),Path("flyout-day"));
+                Render(new FlyoutView(app,new Snapshot(boosted,day)),Path("flyout-boost"));
+                Render(new MainView(app,new Snapshot(s,look)),Path("main"));
+                Render(new BoostView(app,false),Path("boost"));
+                Render(new FineTuneView(app),Path("finetune"));
+                foreach (bool on in new[] { false,true }) { using var image=Glyph.Bitmap(on,dark,32); image.Save(Path($"tray-{(on ? "on" : "off")}"),Drawing.Imaging.ImageFormat.Png); }
             }
         }
         finally { app.ApplyTheme(original); }

@@ -18,6 +18,7 @@ public partial class App : Application
     internal Settings Settings = new();
     internal BoostEngine Engine = null!;
     internal EngineState State => Engine.State(DateTimeOffset.Now);
+    internal Look Look => Night.Look(DateTimeOffset.Now, Settings, TimeZoneInfo.Local);
     internal bool Dry, Isolated, Dark;
     readonly Lazy<int?> brightness = new(() => Native.Brightness());
     internal int? MonitorBrightness => brightness.Value;
@@ -33,11 +34,11 @@ public partial class App : Application
     Forms.NotifyIcon? tray;
     System.Drawing.Icon? trayImage;
     Window? main, flyout;
-    ushort[] expected = GammaRamp.Identity();
+    Rgb expected = GammaRamp.Compose(null, 100, Night.NeutralKelvin);
     string rampCheck = "identity";
     DateTimeOffset pinDeadline;
     bool quitting;
-    DispatcherTimer? brightnessDebounce;
+    DispatcherTimer? saveDebounce;
     static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
 
     protected override void OnStartup(StartupEventArgs e)
@@ -56,7 +57,7 @@ public partial class App : Application
             catch (Exception ex) { Trace.WriteLine(ex); Environment.ExitCode = 1; }
             Shutdown(); return;
         }
-        string[] commands = { "--on", "--off", "--level", "--schedule", "--show", "--flyout", "--quit", "--screenshot" };
+        string[] commands = { "--on", "--off", "--level", "--schedule", "--show", "--flyout", "--quit", "--screenshot", "--night", "--warmth", "--brightness" };
         if (e.Args.Any(commands.Contains))
         {
             Native.AttachConsole(uint.MaxValue);
@@ -73,13 +74,14 @@ public partial class App : Application
         else Settings = Settings.Load(settingsPath);
         lastSaved = File.ReadAllText(settingsPath);
         Engine = new BoostEngine(Settings, TimeZoneInfo.Local);
-        expected = GammaRamp.Compose(null, Settings.UserBrightness);
-        Native.Apply(expected, Dry); rampCheck = Dry ? "dry" : "identity";
+        // Boost is off at every start; warmth, dimming and brightness resume from the saved settings.
+        var look = Look; expected = GammaRamp.Compose(null, look.Brightness, look.Kelvin);
+        Native.Apply(expected, Dry); rampCheck = Dry ? "dry" : expected.IsIdentity ? "identity" : "applied";
         ApplyTheme();
         hotkey = new HwndSource(new HwndSourceParameters(pipeName) { Width = 0, Height = 0, WindowStyle = 0 });
-        hotkey.AddHook((IntPtr hwnd, int msg, IntPtr w, IntPtr l, ref bool handled) => { if (msg == 0x312) { Toggle(); handled = true; } return IntPtr.Zero; });
-        // Isolated checks must not steal the installed app's hotkey.
-        if (!Isolated && !Dry) Native.RegisterHotKey(hotkey.Handle, 1, 0x4006, 0x44);
+        hotkey.AddHook((IntPtr hwnd, int msg, IntPtr w, IntPtr l, ref bool handled) => { if (msg == 0x312) { if (w == (IntPtr)2) ToggleWarm(); else Toggle(); handled = true; } return IntPtr.Zero; });
+        // Isolated checks must not steal the installed app's hotkeys: Ctrl+Shift+D boost, Ctrl+Shift+N warmth.
+        if (!Isolated && !Dry) { Native.RegisterHotKey(hotkey.Handle, 1, 0x4006, 0x44); Native.RegisterHotKey(hotkey.Handle, 2, 0x4006, 0x4E); }
         tray = new Forms.NotifyIcon { Visible = !Isolated };
         tray.MouseClick += (_, a) => Dispatcher.Invoke(() => { if (a.Button == Forms.MouseButtons.Left) ToggleFlyout(); else if (a.Button == Forms.MouseButtons.Right) Menu(); });
         debounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
@@ -88,7 +90,7 @@ public partial class App : Application
         FileSystemEventHandler reload = (_, _) => Dispatcher.BeginInvoke(() => { debounce.Stop(); debounce.Start(); });
         watcher.Changed += reload; watcher.Created += reload; watcher.Renamed += (_, _) => Dispatcher.BeginInvoke(() => { debounce.Stop(); debounce.Start(); });
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
-        timer.Tick += (_, _) => { bool change = Engine.Tick(DateTimeOffset.Now); Refresh(change); PinTray(); };
+        timer.Tick += (_, _) => { bool change = Engine.Tick(DateTimeOffset.Now); ExpireHold(); Refresh(change); PinTray(); };
         timer.Start(); pinDeadline = DateTimeOffset.Now.AddMinutes(2);
         SyncRun();
         SystemEvents.TimeChanged += TimeChanged;
@@ -124,6 +126,15 @@ public partial class App : Application
         if (args.Contains("--on") || (args.Contains("--schedule") && State.Enabled)) Engine.TurnOn(DateTimeOffset.Now);
         if (args.Contains("--off")) Engine.TurnOff(DateTimeOffset.Now);
         if (Enum.TryParse<LevelId>(Value(args, "--level"), true, out var level)) Engine.SetLevel(level, DateTimeOffset.Now);
+        if (int.TryParse(Value(args, "--warmth"), out var kelvin)) { Settings.WarmKelvin = kelvin; Settings.Normalize(); Save(); }
+        if (int.TryParse(Value(args, "--brightness"), out var percent)) { Settings.UserBrightness = percent; Settings.Normalize(); Save(); }
+        switch (Value(args, "--night"))
+        {
+            case "on": if (!Look.Warmth.On) ToggleWarm(); break;
+            case "off": if (Look.Warmth.On) ToggleWarm(); break;
+            case "toggle": ToggleWarm(); break;
+            case "schedule": Settings.WarmHold = null; Save(); break;
+        }
         Refresh(true);
         if (args.Contains("--show")) ShowMain();
         if (args.Contains("--flyout")) ToggleFlyout();
@@ -133,26 +144,40 @@ public partial class App : Application
     internal void Select(LevelId level) { Engine.SetLevel(level, DateTimeOffset.Now); Refresh(true); }
     internal void ScheduleAgain() { Engine.TurnOn(DateTimeOffset.Now); Refresh(true); }
     internal void Save() { Settings.Save(settingsPath); lastSaved = File.ReadAllText(settingsPath); Engine.UpdateSettings(Settings); SyncRun(); Refresh(true); }
-    internal void SetUserBrightness(int value)
+    internal void ToggleWarm() { Settings.WarmHold = Night.Toggle(DateTimeOffset.Now, Settings, TimeZoneInfo.Local); Save(); }
+    void ExpireHold() { if (Settings.WarmHold is { } hold && DateTimeOffset.Now >= hold.Until) { Settings.WarmHold = null; Save(); } }
+    // Slider drags apply the ramp at once and write settings once the drag settles.
+    internal void SetUserBrightness(int value) { Settings.UserBrightness = Math.Clamp(value,50,130); Live(); }
+    internal void SetWarmth(int kelvin) { Settings.WarmKelvin = kelvin; Settings.Normalize(); Live(); }
+    internal void SetDim(int percent) { Settings.DimPercent = percent; Settings.Normalize(); Live(); }
+    void Live()
     {
-        Settings.UserBrightness = Math.Clamp(value,50,130);
-        brightnessDebounce ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
-        brightnessDebounce.Stop();
-        brightnessDebounce.Tick -= ApplyUserBrightness;
-        brightnessDebounce.Tick += ApplyUserBrightness;
-        brightnessDebounce.Start();
+        Apply();
+        saveDebounce ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+        saveDebounce.Stop();
+        saveDebounce.Tick -= SaveSettled;
+        saveDebounce.Tick += SaveSettled;
+        saveDebounce.Start();
     }
-    void ApplyUserBrightness(object? sender, EventArgs e) { brightnessDebounce!.Stop(); Save(); }
+    void SaveSettled(object? sender, EventArgs e) { saveDebounce!.Stop(); Save(); }
     internal void SetBrightness(int value) { if (!Dry) Native.Brightness(value); Settings.MonitorBrightness = value; Save(); }
+    // Applies the composed ramp without rebuilding views, for slider drags.
+    void Apply()
+    {
+        var look = Look;
+        var ramp = GammaRamp.Compose(State.AppliedCurve, look.Brightness, look.Kelvin);
+        if (!expected.SameAs(ramp)) Native.Apply(ramp, Dry);
+        expected = ramp;
+    }
     void Refresh(bool apply)
     {
-        var state = State;
-        var ramp = GammaRamp.Compose(state.AppliedCurve, Settings.UserBrightness);
+        var state = State; var look = Look;
+        var ramp = GammaRamp.Compose(state.AppliedCurve, look.Brightness, look.Kelvin);
+        // A game or driver may reset ramps; reapply whenever the readback drifts from what we set.
         bool mismatch = !Dry && !Native.Matches(expected);
-        bool identity = ramp.SequenceEqual(GammaRamp.Identity());
-        if (!expected.SequenceEqual(ramp) || (!identity && (apply || mismatch))) Native.Apply(ramp, Dry);
+        if (!expected.SameAs(ramp) || (!ramp.IsIdentity && (apply || mismatch))) Native.Apply(ramp, Dry);
         expected = ramp;
-        rampCheck = Dry ? "dry" : (!Native.Matches(expected) ? "mismatch" : state.Enabled ? "boost" : "identity");
+        rampCheck = Dry ? "dry" : !Native.Matches(expected) ? "mismatch" : ramp.IsIdentity ? "identity" : "applied";
         UpdateTray(); Changed?.Invoke(); WriteStatus();
     }
     void WriteStatus()
@@ -160,7 +185,12 @@ public partial class App : Application
         var state = State;
         Directory.CreateDirectory(Path.GetDirectoryName(statusPath)!);
         string tmp = statusPath + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(new { pid = Environment.ProcessId, exePath = exe, dataDir, updatedAt = DateTimeOffset.Now, dryGamma = Dry, state.Enabled, state.Period, state.ScheduledLevel, state.ActiveLevel, state.IsOverride, state.NextChange, state.AppliedCurve, userBrightness = Settings.UserBrightness, rampMid = Dry ? null : Native.RampMid(), rampCheck, runKey = RunValue(), trayPinned = PinValue() }, Json));
+        var look = Look;
+        File.WriteAllText(tmp, JsonSerializer.Serialize(new { pid = Environment.ProcessId, exePath = exe, dataDir, updatedAt = DateTimeOffset.Now, dryGamma = Dry, state.Enabled, state.Period, state.ScheduledLevel, state.ActiveLevel, state.IsOverride, state.NextChange, state.AppliedCurve, userBrightness = Settings.UserBrightness,
+            warm = new { on = look.Warmth.On, factor = Math.Round(look.Warmth.Factor, 3), kelvin = look.Kelvin, target = Settings.WarmKelvin, held = look.Warmth.Held, nextChange = look.Warmth.NextChange, schedule = Settings.WarmSchedule },
+            dim = new { on = look.Dimming.On, factor = Math.Round(look.Dimming.Factor, 3), percent = Settings.DimPercent, schedule = Settings.DimSchedule, nextChange = look.Dimming.NextChange },
+            brightness = Math.Round(look.Brightness, 2), expectedMid = new[] { expected.Red[128], expected.Green[128], expected.Blue[128] },
+            rampMid = Dry ? null : Native.RampMid(), rampCheck, runKey = RunValue(), trayPinned = PinValue() }, Json));
         File.Move(tmp, statusPath, true);
     }
     const string RunPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -193,29 +223,50 @@ public partial class App : Application
         using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
         bool light = key?.GetValue("SystemUsesLightTheme") is int v && v != 0;
         int size = (int)Math.Round(16 * (hotkey == null ? 1 : Math.Max(96, Native.GetDpiForWindow(hotkey.Handle)) / 96.0));
-        var icon = Glyph.Icon(State.Enabled, !light, size); tray.Icon = icon; trayImage?.Dispose(); trayImage = icon;
-        var s = State;
-        tray.Text = !s.Enabled ? "ShadowBoost: Off" : s.IsOverride ? $"ShadowBoost: {s.ActiveLevel} (held until {s.NextChange.LocalDateTime:h:mm tt})" : $"ShadowBoost: {s.ActiveLevel} ({s.Period})";
+        var s = State; var look = Look;
+        var icon = Glyph.Icon(s.Enabled || look.Warmth.On, !light, size); tray.Icon = icon; trayImage?.Dispose(); trayImage = icon;
+        string warm = look.Warmth.On ? $"Warm {look.Kelvin} K" : "Daylight";
+        string boost = s.Enabled ? $", boost {s.ActiveLevel}" : "";
+        // NotifyIcon text is limited to 127 characters.
+        var text = $"ShadowBoost: {warm}{boost}, brightness {Math.Round(look.Brightness)}%"; tray.Text = text.Length > 127 ? text[..127] : text;
     }
     void Menu()
     {
         var menu = new ContextMenu { Width = 220, Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint };
         void Item(string text, Action action, bool selected = false) { var row = new StackPanel { Orientation = Orientation.Horizontal }; row.Children.Add(UI.Text(selected ? "•" : "", 13, "Accent", width: 18)); row.Children.Add(UI.Text(text, 13)); var item = new MenuItem { Header = row }; item.Click += (_, _) => action(); menu.Items.Add(item); }
-        Item(State.Enabled ? "Turn off" : "Turn on", Toggle); menu.Items.Add(new Separator());
-        foreach (var level in Enum.GetValues<LevelId>()) Item(level.ToString(), () => Select(level), State.Enabled && State.ActiveLevel == level);
-        menu.Items.Add(new Separator()); Item("Schedule and settings", ShowMain); Item("Quit ShadowBoost", Quit); menu.IsOpen = true;
+        var warm = Look.Warmth;
+        Item("Open ShadowBoost", ShowMain); menu.Items.Add(new Separator());
+        Item(warm.On ? $"Warm until {UI.Clock(warm.NextChange)}" : "Warm now", ToggleWarm, warm.On);
+        Item("Shadow boost", Toggle, State.Enabled); menu.Items.Add(new Separator());
+        Item("Quit ShadowBoost", Quit); menu.IsOpen = true;
     }
     internal void ShowMain()
     {
         if (main == null)
         {
-            main = new Window { Title = "ShadowBoost", Width = 460, Height = 690, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterScreen, Content = new MainView(this) };
+            main = new Window { Title = "ShadowBoost", Width = 500, Height = 780, ResizeMode = ResizeMode.CanMinimize, WindowStartupLocation = WindowStartupLocation.CenterScreen, Content = new MainView(this) };
             main.SetResourceReference(Window.BackgroundProperty, "Bg"); main.SourceInitialized += (_, _) => Native.Decorate(main, Dark);
             main.Closing += (_, e) => { if (!quitting) { e.Cancel = true; main.Hide(); } };
         }
         main.Content = new MainView(this); main.Show(); main.Activate();
     }
+    // Reads the position Windows already knows (location services or the default location in Settings); no web lookup.
+    internal async Task<string> LocatePc()
+    {
+        try
+        {
+            if (await global::Windows.Devices.Geolocation.Geolocator.RequestAccessAsync() != global::Windows.Devices.Geolocation.GeolocationAccessStatus.Allowed)
+                return "Windows location is off for desktop apps. Type the coordinates instead.";
+            var position = await new global::Windows.Devices.Geolocation.Geolocator().GetGeopositionAsync(TimeSpan.FromHours(12), TimeSpan.FromSeconds(10));
+            var point = position.Coordinate.Point.Position;
+            Settings.Latitude = Math.Round(point.Latitude, 4); Settings.Longitude = Math.Round(point.Longitude, 4); Settings.PlaceName = "This PC"; Save();
+            return "Updated from this PC's location.";
+        }
+        catch (Exception ex) { Trace.WriteLine(ex); return "Windows did not return a location. Type the coordinates instead."; }
+    }
     internal void FineTune() { if (main != null) main.Content = new FineTuneView(this); }
+    internal void BoostPage() { if (main != null) main.Content = new BoostView(this); }
+    internal void ShowMainPage() { if (main != null) main.Content = new MainView(this); }
     void ToggleFlyout()
     {
         if (flyout?.IsVisible == true) { flyout.Hide(); return; }
@@ -231,15 +282,16 @@ public partial class App : Application
     void TimeChanged(object? s, EventArgs e) => Dispatcher.BeginInvoke(() => { Engine.Tick(DateTimeOffset.Now); Refresh(true); });
     void PowerChanged(object s, PowerModeChangedEventArgs e) { if (e.Mode == PowerModes.Resume) TimeChanged(s, e); }
     void ThemeChanged(object s, UserPreferenceChangedEventArgs e) => Dispatcher.BeginInvoke(() => { ApplyTheme(); Refresh(false); });
-    void OnSessionEnding(object s, SessionEndingEventArgs e) => Native.Apply(GammaRamp.Identity(), Dry);
-    void ProcessExit(object? s, EventArgs e) => Native.Apply(GammaRamp.Identity(), Dry);
+    static Rgb Neutral => GammaRamp.Compose(null, 100, Night.NeutralKelvin);
+    void OnSessionEnding(object s, SessionEndingEventArgs e) => Native.Apply(Neutral, Dry);
+    void ProcessExit(object? s, EventArgs e) => Native.Apply(Neutral, Dry);
     internal void Quit()
     {
-        if (brightnessDebounce?.IsEnabled == true) { brightnessDebounce.Stop(); Save(); }
+        if (saveDebounce?.IsEnabled == true) { saveDebounce.Stop(); Save(); }
         quitting = true; timer?.Stop(); stopping.Cancel(); watcher?.Dispose(); debounce?.Stop();
-        Native.Apply(GammaRamp.Identity(), Dry);
+        Native.Apply(Neutral, Dry);
         Engine.TurnOff(DateTimeOffset.Now); rampCheck = Dry ? "dry" : "identity"; WriteStatus();
-        if (hotkey != null) { if (!Isolated && !Dry) Native.UnregisterHotKey(hotkey.Handle, 1); hotkey.Dispose(); }
+        if (hotkey != null) { if (!Isolated && !Dry) { Native.UnregisterHotKey(hotkey.Handle, 1); Native.UnregisterHotKey(hotkey.Handle, 2); } hotkey.Dispose(); }
         tray?.Dispose(); trayImage?.Dispose();
         SystemEvents.TimeChanged -= TimeChanged; SystemEvents.DisplaySettingsChanged -= TimeChanged; SystemEvents.PowerModeChanged -= PowerChanged; SystemEvents.UserPreferenceChanged -= ThemeChanged; SystemEvents.SessionEnding -= OnSessionEnding;
         mutex?.ReleaseMutex(); mutex?.Dispose(); Shutdown();

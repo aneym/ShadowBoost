@@ -31,6 +31,16 @@ public sealed class Settings
     public int UserBrightness { get; set; } = 100;
     public int? MonitorBrightness { get; set; }
     public bool TrayPinApplied { get; set; }
+    public NightSchedule WarmSchedule { get; set; } = NightSchedule.Sunset;
+    public TimeOnly WarmFrom { get; set; } = new(21, 0);
+    public TimeOnly WarmTo { get; set; } = new(7, 0);
+    public int WarmKelvin { get; set; } = 3400;
+    public WarmHold? WarmHold { get; set; }
+    public NightSchedule DimSchedule { get; set; } = NightSchedule.Off;
+    public TimeOnly DimFrom { get; set; } = new(23, 0);
+    public TimeOnly DimTo { get; set; } = new(7, 0);
+    public int DimPercent { get; set; } = 80;
+    public int FadeMinutes { get; set; } = 20;
 
     private static readonly JsonSerializerOptions JsonOptions = CreateOptions();
 
@@ -93,7 +103,7 @@ public sealed class Settings
         return settings;
     }
 
-    private void Normalize()
+    public void Normalize()
     {
         var defaults = new Settings();
         PeriodLevels ??= new();
@@ -108,6 +118,11 @@ public sealed class Settings
                 Math.Clamp(saved.Contrast, 50, 150), Math.Clamp(saved.Brightness, 50, 130));
         }
         UserBrightness = Math.Clamp(UserBrightness, 50, 130);
+        WarmKelvin = (int)Math.Round(Math.Clamp(WarmKelvin, Night.MinKelvin, Night.NeutralKelvin) / 100.0) * 100;
+        DimPercent = Math.Clamp(DimPercent, 30, 100);
+        FadeMinutes = Math.Clamp(FadeMinutes, 0, 60);
+        if (!Enum.IsDefined(WarmSchedule)) WarmSchedule = NightSchedule.Sunset;
+        if (!Enum.IsDefined(DimSchedule)) DimSchedule = NightSchedule.Off;
         if (MonitorBrightness.HasValue) MonitorBrightness = Math.Clamp(MonitorBrightness.Value, 0, 100);
     }
 

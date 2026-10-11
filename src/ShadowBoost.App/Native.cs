@@ -19,7 +19,8 @@ internal static class Native
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)] public ushort[] Red;
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)] public ushort[] Green;
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)] public ushort[] Blue;
-        public Ramp(ushort[] values) { Red = values; Green = values.ToArray(); Blue = values.ToArray(); }
+        public Ramp(Rgb values) { Red = values.Red.ToArray(); Green = values.Green.ToArray(); Blue = values.Blue.ToArray(); }
+        public Ramp(int size) { Red = new ushort[size]; Green = new ushort[size]; Blue = new ushort[size]; }
     }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool EnumDisplayDevices(string? device, uint index, ref DisplayDevice data, uint flags);
     [DllImport("gdi32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateDC(string driver, string device, string? output, IntPtr init);
@@ -44,21 +45,22 @@ internal static class Native
     [DllImport("dxva2.dll")] static extern bool SetMonitorBrightness(IntPtr monitor, uint value);
     [DllImport("dxva2.dll")] static extern bool DestroyPhysicalMonitor(IntPtr monitor);
 
-    public static void Apply(ushort[] values, bool dry)
+    // Every attached display gets the same ramp, the way f.lux sets each monitor's DC.
+    public static void Apply(Rgb values, bool dry)
     {
         if (dry) return;
         Displays((dc, _) => { var ramp = new Ramp(values); SetDeviceGammaRamp(dc, ref ramp); });
     }
-    public static bool Matches(ushort[] values)
+    public static bool Matches(Rgb values)
     {
         bool matches = true;
-        Displays((dc, primary) => { if (!primary) return; var ramp = new Ramp(new ushort[256]); matches = GetDeviceGammaRamp(dc, ref ramp) && WithinTolerance(ramp.Red, values) && WithinTolerance(ramp.Green, values) && WithinTolerance(ramp.Blue, values); });
+        Displays((dc, primary) => { if (!primary) return; var ramp = new Ramp(256); matches = GetDeviceGammaRamp(dc, ref ramp) && WithinTolerance(ramp.Red, values.Red) && WithinTolerance(ramp.Green, values.Green) && WithinTolerance(ramp.Blue, values.Blue); });
         return matches;
     }
-    public static int? RampMid()
+    public static int[]? RampMid()
     {
-        int? value = null;
-        Displays((dc, primary) => { if (!primary) return; var ramp = new Ramp(new ushort[256]); if (GetDeviceGammaRamp(dc, ref ramp)) value = ramp.Red[128]; });
+        int[]? value = null;
+        Displays((dc, primary) => { if (!primary) return; var ramp = new Ramp(256); if (GetDeviceGammaRamp(dc, ref ramp)) value = new int[] { ramp.Red[128], ramp.Green[128], ramp.Blue[128] }; });
         return value;
     }
     [DllImport("kernel32.dll")] internal static extern bool AttachConsole(uint processId);

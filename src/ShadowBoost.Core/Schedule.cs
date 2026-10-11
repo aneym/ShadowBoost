@@ -48,7 +48,7 @@ public static class Schedule
         return (rise ?? Local(date, new(7, 0), tz), set ?? Local(date, new(19, 0), tz));
     }
 
-    private static DateTimeOffset Local(DateOnly date, TimeOnly time, TimeZoneInfo tz)
+    internal static DateTimeOffset Local(DateOnly date, TimeOnly time, TimeZoneInfo tz)
     {
         var local = date.ToDateTime(time, DateTimeKind.Unspecified);
         // A skipped wall time starts at the next valid minute; a repeated wall time uses standard time.
