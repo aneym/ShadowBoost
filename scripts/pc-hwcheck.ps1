@@ -31,7 +31,7 @@ try {
         Leg 'contrast-max' @('--contrast', '100') { param($m) $m.contrast.readback -eq $m.contrast.max } @(0x12)
     }
     if ($before.warmth -eq 'monitor') {
-        Leg 'warmth-6500K' @('--night', 'on', '--warmth', '6500') { param($m) ($m.gains.readback -join ',') -eq ($m.gains.neutral -join ',') } @(0x14, 0x16, 0x18, 0x1A)
+        Leg 'warmth-6500K' @('--night', 'on', '--warmth', '6500') { param($m) ($m.gains.current -join ',') -eq ($m.gains.neutral -join ',') } @(0x14, 0x16, 0x18, 0x1A)
         Leg 'warmth-2700K' @('--night', 'on', '--warmth', '2700') { param($m) $g = $m.gains.readback; $g[2] -lt $m.gains.neutral[2] -and ($g -join ',') -eq ($m.gains.target -join ',') } @(0x14, 0x16, 0x18, 0x1A)
     }
 } finally {
