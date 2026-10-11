@@ -27,8 +27,11 @@ public partial class App : Application
     DateTimeOffset arcLost = DateTimeOffset.MaxValue, arcNextSample, arcSince;
     double arcLuma = double.NaN; string? arcError; bool arcSampling; int arcSamples;
     DispatcherTimer? arcTimer;
-    internal double ArcDarkness(DateTimeOffset now) => ArcSettings.PinDarkness(Settings.Arc.Pin) ?? (Settings.Arc.SceneAdaptive ? arcScene.Current(now) : 0.5);
-    internal Curve ArcCurve => Settings.Arc.CurveAt(ArcDarkness(DateTimeOffset.Now));
+    // Hardware only (default): Auto is the room level and pins move the monitor brightness. With the software lift: the scene drives the ramp.
+    internal double ArcDarkness(DateTimeOffset now) => ArcSettings.PinDarkness(Settings.Arc.Pin) ?? (!Settings.Arc.SoftwareLift ? 0 : Settings.Arc.SceneAdaptive ? arcScene.Current(now) : 0.5);
+    internal Curve? ArcCurve => Settings.Arc.SoftwareLift ? Settings.Arc.CurveAt(ArcDarkness(DateTimeOffset.Now)) : null;
+    // With the software lift the scene moves only the ramp; the monitor stays at the room level (or the pin) so DDC never pumps.
+    int ArcHardwarePercent => Settings.Arc.HardwareBrightness(State.Period, Settings.Arc.SoftwareLift && Settings.Arc.Pin == ArcPin.Auto ? 0 : ArcDarkness(DateTimeOffset.Now));
     Curve? CurrentCurve => ArcOn ? ArcCurve : State.AppliedCurve;
     internal bool Dry, Isolated, Dark;
     MonitorBus? bus;
@@ -51,7 +54,7 @@ public partial class App : Application
     internal int PresetOf(MonitorInfo m) => Saved(m)?.Preset ?? m.V(0x14)?.Current ?? 0;
     internal int[] NeutralGains(MonitorInfo m) => Saved(m)?.Gains is { Length: 3 } g ? g : new[] { m.V(0x16)?.Current ?? 0, m.V(0x18)?.Current ?? 0, m.V(0x1A)?.Current ?? 0 };
     internal bool ShowGains(MonitorInfo m) => m.HasGains && (!m.Caps.Has(0x14) || Hardware.IsUserPreset(PresetOf(m)));
-    double EffectiveLevel(Look look) => ArcOn ? Level.Below + Settings.Arc.RoomBrightness.GetValueOrDefault(State.Period, 100) : Level.Dim(SavedLevel, Night.DimScale(look.Dimming, Settings));
+    double EffectiveLevel(Look look) => ArcOn ? Level.Below + ArcHardwarePercent : Level.Dim(SavedLevel, Night.DimScale(look.Dimming, Settings));
     internal string BrightnessShown(Look look) => HardwareBrightness ? Level.Label(EffectiveLevel(look)) : $"{Math.Round(look.Brightness)}%";
     string lastSaved = "";
     internal event Action? Changed;
@@ -174,6 +177,8 @@ public partial class App : Application
             case "day": PinArc(ArcPin.Day); break;
             case "dusk": PinArc(ArcPin.Dusk); break;
             case "night": PinArc(ArcPin.Night); break;
+            case "lift-on": Settings.Arc.SoftwareLift = true; Save(); break;
+            case "lift-off": Settings.Arc.SoftwareLift = false; Save(); break;
         }
         if (int.TryParse(Value(args, "--brightness"), out var percent)) { if (HardwareBrightness) Settings.BrightnessLevel = Level.Below + Math.Clamp(percent, 0, Level.Span); else Settings.UserBrightness = percent; Settings.Normalize(); Save(); }
         if (double.TryParse(Value(args, "--brightness-level"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var levelValue) && double.IsFinite(levelValue)) { Settings.BrightnessLevel = levelValue; Settings.Normalize(); Save(); }
@@ -389,7 +394,7 @@ public partial class App : Application
             rampMid = Dry ? null : Native.RampMid(), rampCheck,
             arc = new { enabled = Settings.Arc.Enabled, active = ArcOn, process = arcProcess, since = ArcOn ? arcSince : (DateTimeOffset?)null, pin = Settings.Arc.Pin, sceneAdaptive = Settings.Arc.SceneAdaptive,
                 luma = double.IsFinite(arcLuma) ? Math.Round(arcLuma, 1) : (double?)null, samples = arcSamples, sampleError = arcError, darkness = Math.Round(ArcDarkness(DateTimeOffset.Now), 2), target = arcScene.Target,
-                curve = ArcOn ? ArcCurve : null, roomBrightness = ArcOn ? Settings.Arc.RoomBrightness.GetValueOrDefault(state.Period, 100) : (int?)null }, runKey = RunValue(), trayPinned = PinValue() }, Json);
+                softwareLift = Settings.Arc.SoftwareLift, curve = ArcOn ? ArcCurve : null, monitorBrightness = ArcOn ? ArcHardwarePercent : (int?)null }, runKey = RunValue(), trayPinned = PinValue() }, Json);
         // A reader holding status.json open (a check, an editor, antivirus) makes the replace fail; retry briefly, never crash.
         for (int attempt = 0; ; attempt++)
         {
@@ -443,11 +448,12 @@ public partial class App : Application
         Item(warm.On ? $"Warm until {UI.Clock(warm.NextChange)}" : "Warm now", ToggleWarm, warm.On);
         Item("Shadow boost", Toggle, State.Enabled); menu.Items.Add(new Separator());
         Item(ArcOn ? $"ARC profile: {ArcLabel}" : "ARC profile", () => { Settings.Arc.Enabled = !Settings.Arc.Enabled; Save(); }, Settings.Arc.Enabled);
-        foreach (var pin in Enum.GetValues<ArcPin>()) { var p = pin; Item(p == ArcPin.Auto ? "ARC look: Auto (follows the scene)" : $"ARC look: {p}", () => PinArc(p), Settings.Arc.Pin == p); }
+        foreach (var pin in Enum.GetValues<ArcPin>()) { var p = pin; Item(p == ArcPin.Auto ? (Settings.Arc.SoftwareLift ? "ARC look: Auto (follows the scene)" : "ARC look: Auto (room light)") : $"ARC look: {p}", () => PinArc(p), Settings.Arc.Pin == p); }
+        Item("Software lift (not used in ARC)", () => { Settings.Arc.SoftwareLift = !Settings.Arc.SoftwareLift; Save(); }, Settings.Arc.SoftwareLift);
         menu.Items.Add(new Separator());
         Item("Quit ShadowBoost", Quit); menu.IsOpen = true;
     }
-    internal string ArcLabel => Settings.Arc.Pin == ArcPin.Auto ? $"Auto {ArcDarkness(DateTimeOffset.Now):0.0}" : $"{Settings.Arc.Pin} (pinned)";
+    internal string ArcLabel => Settings.Arc.Pin != ArcPin.Auto ? $"{Settings.Arc.Pin} (pinned)" : Settings.Arc.SoftwareLift ? $"Auto {ArcDarkness(DateTimeOffset.Now):0.0}" : "Auto (room light)";
     internal void PinArc(ArcPin pin) { Settings.Arc.Pin = pin; Save(); }
     void CycleArc() => PinArc((ArcPin)(((int)Settings.Arc.Pin + 1) % 4));
     // Every 250 ms: is the game in front? Enter when it is, leave 3 s after it is not; sample the scene every SampleSeconds and fade the ramp.
@@ -463,7 +469,8 @@ public partial class App : Application
             if (!Settings.Arc.Enabled || now - arcLost >= TimeSpan.FromSeconds(3)) { LeaveArc(); return; }
         }
         if (!ArcOn) return;
-        if (front != null && Settings.Arc.Pin == ArcPin.Auto && Settings.Arc.SceneAdaptive && !arcSampling && now >= arcNextSample)
+        // The screen is read only with the software lift on; the hardware-only profile never opens desktop duplication.
+        if (front != null && Settings.Arc.SoftwareLift && Settings.Arc.Pin == ArcPin.Auto && Settings.Arc.SceneAdaptive && !arcSampling && now >= arcNextSample)
         {
             arcSampling = true; arcNextSample = now.AddSeconds(Settings.Arc.SampleSeconds); var window = arcWindow;
             Task.Run(() => ArcWatch.Sample(window)).ContinueWith(t => Dispatcher.BeginInvoke(() =>
@@ -476,6 +483,7 @@ public partial class App : Application
             }));
         }
         Push(ArcCurve, Look, false);
+        ApplyHardware();
     }
     void EnterArc(DateTimeOffset now)
     {

@@ -24,6 +24,18 @@ public sealed class ArcTests
         Assert.Equal(new Curve(lift, gamma, contrast, brightness), arc.CurveAt(arc.Darkness(luma)));
     }
 
+    // Guards the hardware-only look: pins move only the monitor brightness, from the room level (Auto, Day) to the panel maximum (Night).
+    [Theory]
+    [InlineData(Period.Day, ArcPin.Night, 100)]
+    [InlineData(Period.Night, ArcPin.Day, 80)]
+    [InlineData(Period.Night, ArcPin.Dusk, 90)]
+    [InlineData(Period.Night, ArcPin.Night, 100)]
+    [InlineData(Period.Evening, ArcPin.Dusk, 95)]
+    public void PinsMoveMonitorBrightness(Period period, ArcPin pin, int percent)
+    {
+        Assert.Equal(percent, new ArcSettings().HardwareBrightness(period, ArcSettings.PinDarkness(pin)!.Value));
+    }
+
     // Guards flash rejection: one bright frame (muzzle flash, explosion, a menu) inside a dark scene never moves the look.
     [Fact]
     public void OneBrightSampleDoesNotMoveTheLook()
@@ -95,6 +107,7 @@ public sealed class ArcTests
             File.WriteAllText(path, "{\"userBrightness\": 108, \"brightnessLevel\": 131}");
             var old = Settings.Load(path);
             Assert.True(old.Arc.Enabled);
+            Assert.False(old.Arc.SoftwareLift);
             Assert.Equal(ArcPin.Auto, old.Arc.Pin);
             Assert.Equal(new[] { "PioneerGame" }, old.Arc.Processes);
             Assert.Equal(80, old.Arc.RoomBrightness[Period.Night]);

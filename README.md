@@ -68,22 +68,26 @@ The UI and monochrome tray glyph follow Windows light/dark themes live.
 ## ARC competitive profile
 
 While ARC Raiders (`PioneerGame.exe`, or any name in `arc.processes`) owns the foreground window, ShadowBoost
-switches to the ARC profile and switches back 3 s after the game loses focus or exits:
+switches to the ARC profile and switches back 3 s after the game loses focus or exits.
+
+By default the profile is hardware only: the monitor's own DDC/CI controls change, the gamma ramp stays identity and
+the screen is never read.
 
 - The monitor goes to the room-light brightness for the time of day (`arc.roomBrightness`: Day 100, Evening 90,
   Night 80; there is no ambient light sensor on the LG) and to `arc.contrast` (70). Warmth and dimming pause; the
   white point is neutral.
-- The gamma ramp follows the scene: every `arc.sampleSeconds` (2 s) the app reads one frame of the game's monitor
-  through DXGI desktop duplication (what OBS and Discord use), takes the mean luma of the centre 70 % (HUD excluded),
-  and blends between the ARC Day, Dusk and Night curves (`arc.day`, `arc.dusk`, `arc.night`; luma 90 and above is day,
-  30 and below is night). An 8 s median, 0.1 steps that must hold for 3 s, and a 1.5 s fade keep muzzle flashes and
-  explosions from moving the look.
 - A manual pick sticks: Ctrl+Alt+F10 cycles Auto, Day, Dusk, Night (also in the tray menu and `--arc auto|day|dusk|night`);
-  the pick holds across scenes and restarts until Auto is picked again. `--arc on|off` turns the profile on or off.
+  the pick holds across scenes and restarts until Auto is picked again. Day keeps the room level, Night raises the
+  monitor to its maximum, Dusk sits halfway. `--arc on|off` turns the profile on or off.
 - Ctrl+Shift+D and Ctrl+Shift+N are released while the game is in front so they never swallow keys mid-fight.
-- Nothing touches the game: the process name comes from the system process list (no handle), pixels come from the
-  desktop, and the controls are the monitor's own DDC/CI and the Windows gamma ramp. In-game values never become the
-  saved desktop settings. `status.json` has an `arc` block (active, luma, darkness, curve, sample errors).
+- The process name comes from the system process list (no handle to the game). In-game values never become the saved
+  desktop settings. `status.json` has an `arc` block.
+
+**Software lift (not used in ARC)** is an explicit toggle, off by default (`arc.softwareLift`, tray menu, `--arc lift-on|lift-off`).
+When on, the gamma ramp blends the ARC Day, Dusk and Night curves, and in Auto it follows the scene: every
+`arc.sampleSeconds` (2 s) the app reads one frame of the game's monitor through DXGI desktop duplication, takes the mean
+luma of the centre 70 % (HUD excluded), and maps luma 90 and above to day, 30 and below to night (8 s median, 0.1 steps
+held 3 s, 1.5 s fade). The monitor then stays at the room level so DDC never pumps with the scene.
 
 ## Build
 

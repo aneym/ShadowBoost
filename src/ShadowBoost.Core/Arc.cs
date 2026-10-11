@@ -18,7 +18,13 @@ public sealed class ArcSettings
     public Dictionary<Period, int> RoomBrightness { get; set; } = new() { [Period.Day] = 100, [Period.Evening] = 90, [Period.Night] = 80 };
     /// <summary>Monitor contrast percent while the game runs; null keeps the saved contrast.</summary>
     public int? Contrast { get; set; } = 70;
-    /// <summary>Scene adaptation from screen samples; off means the Dusk curve unless pinned.</summary>
+    /// <summary>
+    /// Off (default): the profile is hardware only. The monitor's own DDC/CI controls change, the gamma ramp stays identity
+    /// and the screen is never read. On: the gamma-ramp shadow lift and the screen-luma scene adaptation are added.
+    /// Labelled "Software lift (not used in ARC)" in the UI.
+    /// </summary>
+    public bool SoftwareLift { get; set; }
+    /// <summary>With the software lift on: scene adaptation from screen samples; off means the Dusk curve unless pinned.</summary>
     public bool SceneAdaptive { get; set; } = true;
     /// <summary>Seconds between screen samples (desktop duplication is opened only for the sample).</summary>
     public double SampleSeconds { get; set; } = 2;
@@ -43,6 +49,13 @@ public sealed class ArcSettings
 
     /// <summary>Darkness 0 (day) .. 1 (night) for a pinned look, or null for Auto.</summary>
     public static double? PinDarkness(ArcPin pin) => pin switch { ArcPin.Day => 0, ArcPin.Dusk => 0.5, ArcPin.Night => 1, _ => null };
+
+    /// <summary>Monitor brightness percent for a darkness: the room level at 0, the panel maximum at 1 (a pinned Night look lifts shadows in hardware).</summary>
+    public int HardwareBrightness(Period period, double darkness)
+    {
+        int room = RoomBrightness.GetValueOrDefault(period, 100);
+        return (int)Math.Round(room + (100 - room) * Math.Clamp(darkness, 0, 1), MidpointRounding.AwayFromZero);
+    }
 
     /// <summary>Scene darkness from mean luma: day at DayLuma and above, night at NightLuma and below, linear between.</summary>
     public double Darkness(double luma) => Math.Clamp((DayLuma - luma) / (double)(DayLuma - NightLuma), 0, 1);
