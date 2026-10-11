@@ -1,16 +1,15 @@
 # timeout: 300
-# Install job for the factory pc-install runner (queued with pc-install-drop; the runner refuses while a game runs).
-# Installs sb-build\out\ShadowBoost.exe (from scripts/pc-check.sh) after checking its sha256, keeps the previous exe as
+# Install body for scripts/pc-run.sh (factory pc-install runner, headless; the runner refuses while a game runs).
+# Installs sb-build\out\ShadowBoost.exe (staged by scripts/pc-job-prelude.ps1) after checking its sha256, keeps the previous exe as
 # ShadowBoost.exe.prev, starts the new one with --tray (hidden, no focus), and records before/after evidence:
 # status, settings, a primary-screen capture and the full gamma ramp read back from the primary display.
 # Screen captures are taken before the gamma ramp, so the warmth shows in the ramp readback, not in the pixels.
-# The runner passes no arguments: substitute __SHA__ before queueing.
-$Sha = '__SHA__'; $Popover = $true
+$Sha = '__SHA__'; $Popover = $false
 $ErrorActionPreference = 'Stop'
 $stage = Join-Path $env:LOCALAPPDATA 'Temp\sb-build\out\ShadowBoost.exe'
 $dir = Join-Path $env:LOCALAPPDATA 'Programs\ShadowBoost'; $exe = Join-Path $dir 'ShadowBoost.exe'
 $status = Join-Path $env:LOCALAPPDATA 'ShadowBoost\status.json'; $settings = Join-Path $env:APPDATA 'ShadowBoost\settings.json'
-$evidence = Join-Path $env:LOCALAPPDATA ('Temp\sb-nightvision-' + (Get-Date -Format 'yyyyMMddTHHmmss'))
+$evidence = Join-Path $env:LOCALAPPDATA ('Temp\sb-install-' + (Get-Date -Format 'yyyyMMddTHHmmss'))
 New-Item -ItemType Directory -Force $evidence | Out-Null
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms
 Add-Type @'
@@ -36,7 +35,7 @@ function Capture([string]$name, [int]$x = 0, [int]$y = 0, [int]$w = 0, [int]$h =
 function Ramp([string]$name) { $r = [SbScreen]::Ramp(); if ($r) { ConvertTo-Json -Compress @{ red = $r[0..255]; green = $r[256..511]; blue = $r[512..767] } | Set-Content (Join-Path $evidence "$name.json") -Encoding UTF8; return @($r[128], $r[384], $r[640]) } }
 function Snap([string]$name) {
     foreach ($f in @(@($status, 'status'), @($settings, 'settings'))) { if (Test-Path $f[0]) { Copy-Item $f[0] (Join-Path $evidence "$($f[1])-$name.json") } }
-    Capture "screen-$name"; $mid = Ramp "ramp-$name"; Write-Output "$name ramp mid R,G,B = $($mid -join ',')"
+    Capture "screen-$name"; $mid = Ramp "ramp-$name"; Write-Output "$name ramp mid R,G,B = $($mid -join ',')"; Vcp $name
 }
 if ((Get-FileHash $stage -Algorithm SHA256).Hash -ne $Sha) { throw "staged exe sha256 differs from $Sha" }
 Snap 'before'
@@ -62,6 +61,7 @@ $run = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -
 Write-Output "installed sha256 $((Get-FileHash $exe -Algorithm SHA256).Hash); prev kept: $(Test-Path (Join-Path $dir 'ShadowBoost.exe.prev'))"
 Write-Output "processes: $($procs.Count) ($($procs.Id -join ',')); run key: $run"
 $s = Get-Content $status -Raw | ConvertFrom-Json
+Write-Output "monitors: $(ConvertTo-Json -Compress -Depth 6 $s.monitors) brightnessSource=$($s.brightnessSource)"
 Write-Output "status: boost enabled=$($s.enabled) warm on=$($s.warm.on) kelvin=$($s.warm.kelvin) appliedKelvin=$($s.warm.appliedKelvin) held=$($s.warm.held) next=$($s.warm.nextChange) brightness=$($s.brightness) rampCheck=$($s.rampCheck) expectedMid=$($s.expectedMid -join ',') rampMid=$($s.rampMid -join ',')"
 # The taskbar pin followed the legacy rename; point it and any Start Menu shortcut at the installed exe (backups kept),
 # then read every target back.
