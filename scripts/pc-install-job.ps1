@@ -53,6 +53,8 @@ $app = Start-Process -FilePath $exe -ArgumentList '--tray' -WindowStyle Hidden -
 $deadline = (Get-Date).AddSeconds(20)
 do { Start-Sleep -Milliseconds 500; $s = if (Test-Path $status) { Get-Content $status -Raw | ConvertFrom-Json } } while ((-not $s -or $s.pid -ne $app.Id -or -not $s.warm) -and (Get-Date) -lt $deadline)
 if (-not $s -or $s.pid -ne $app.Id -or -not $s.warm) { throw 'new app did not write a status with warmth' }
+# A quick-toggle hold from before the install keeps the display out of the schedule; return to it.
+Start-Process -FilePath $exe -ArgumentList @('--night', 'schedule') -Wait
 Start-Sleep -Seconds 3
 Snap 'after'
 $procs = @(Get-Process ShadowBoost -ErrorAction SilentlyContinue)
@@ -60,7 +62,7 @@ $run = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -
 Write-Output "installed sha256 $((Get-FileHash $exe -Algorithm SHA256).Hash); prev kept: $(Test-Path (Join-Path $dir 'ShadowBoost.exe.prev'))"
 Write-Output "processes: $($procs.Count) ($($procs.Id -join ',')); run key: $run"
 $s = Get-Content $status -Raw | ConvertFrom-Json
-Write-Output "status: boost enabled=$($s.enabled) warm on=$($s.warm.on) kelvin=$($s.warm.kelvin) held=$($s.warm.held) next=$($s.warm.nextChange) brightness=$($s.brightness) rampCheck=$($s.rampCheck) expectedMid=$($s.expectedMid -join ',') rampMid=$($s.rampMid -join ',')"
+Write-Output "status: boost enabled=$($s.enabled) warm on=$($s.warm.on) kelvin=$($s.warm.kelvin) appliedKelvin=$($s.warm.appliedKelvin) held=$($s.warm.held) next=$($s.warm.nextChange) brightness=$($s.brightness) rampCheck=$($s.rampCheck) expectedMid=$($s.expectedMid -join ',') rampMid=$($s.rampMid -join ',')"
 # The taskbar pin followed the legacy rename; point it and any Start Menu shortcut at the installed exe (backups kept),
 # then read every target back.
 $shell = New-Object -ComObject WScript.Shell

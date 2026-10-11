@@ -120,7 +120,10 @@ public sealed class FlyoutView : UserControl
         if (look.Warmth.On) { var k = new System.Windows.Documents.Run($"  {look.Kelvin} K") { FontSize = 20, FontWeight = FontWeights.Normal }; k.SetResourceReference(System.Windows.Documents.TextElement.ForegroundProperty, "Text2"); big.Inlines.Add(k); }
         big.SetResourceReference(TextBlock.ForegroundProperty, look.Warmth.On ? "Text" : "Text2");
         body.Children.Add(new Border { Margin = new Thickness(16,14,16,0), Child = big });
-        body.Children.Add(new Border { Margin = new Thickness(16,2,16,0), Child = UI.Text(UI.WarmCopy(look, settings),13,"Text2") });
+        string copy = UI.WarmCopy(look, settings);
+        // Windows bounds gamma ramps unless the expanded range is enabled; say what the display really shows.
+        if (snapshot == null && look.Warmth.On && app.AppliedKelvin > look.Kelvin) copy += $" Windows allows {app.AppliedKelvin} K on this display.";
+        body.Children.Add(new Border { Margin = new Thickness(16,2,16,0), Child = UI.Text(copy,13,"Text2") });
         body.Children.Add(new Border { Margin = new Thickness(16,16,16,0), Child = UI.WarmSlider(app, "Warmth") });
         body.Children.Add(new Border { Margin = new Thickness(16,16,16,0), Child = UI.Slider("Brightness", 50, 130, settings.UserBrightness, n => n + "%", app.SetUserBrightness, "BrightnessSlider") });
         var boost = new Grid { Margin = new Thickness(16,14,16,0) }; boost.ColumnDefinitions.Add(new()); boost.ColumnDefinitions.Add(new() { Width = GridLength.Auto });

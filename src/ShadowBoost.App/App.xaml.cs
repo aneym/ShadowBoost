@@ -35,6 +35,8 @@ public partial class App : Application
     System.Drawing.Icon? trayImage;
     Window? main, flyout;
     Rgb expected = GammaRamp.Compose(null, 100, Night.NeutralKelvin);
+    Rgb? lastTarget;
+    internal int AppliedKelvin = Night.NeutralKelvin;
     string rampCheck = "identity";
     DateTimeOffset pinDeadline;
     bool quitting;
@@ -75,8 +77,7 @@ public partial class App : Application
         lastSaved = File.ReadAllText(settingsPath);
         Engine = new BoostEngine(Settings, TimeZoneInfo.Local);
         // Boost is off at every start; warmth, dimming and brightness resume from the saved settings.
-        var look = Look; expected = GammaRamp.Compose(null, look.Brightness, look.Kelvin);
-        Native.Apply(expected, Dry); rampCheck = Dry ? "dry" : expected.IsIdentity ? "identity" : "applied";
+        var look = Look; Push(null, look, true); rampCheck = Dry ? "dry" : expected.IsIdentity ? "identity" : "applied";
         ApplyTheme();
         hotkey = new HwndSource(new HwndSourceParameters(pipeName) { Width = 0, Height = 0, WindowStyle = 0 });
         hotkey.AddHook((IntPtr hwnd, int msg, IntPtr w, IntPtr l, ref bool handled) => { if (msg == 0x312) { if (w == (IntPtr)2) ToggleWarm(); else Toggle(); handled = true; } return IntPtr.Zero; });
@@ -162,22 +163,35 @@ public partial class App : Application
     void SaveSettled(object? sender, EventArgs e) { saveDebounce!.Stop(); Save(); }
     internal void SetBrightness(int value) { if (!Dry) Native.Brightness(value); Settings.MonitorBrightness = value; Save(); }
     // Applies the composed ramp without rebuilding views, for slider drags.
-    void Apply()
+    void Apply() => Push(State.AppliedCurve, Look, false);
+    // Sets the ramp for this look. When Windows refuses it, keep brightness and boost and search for the
+    // warmest white point it accepts, so a refused warm ramp never leaves the display at identity.
+    void Push(Curve? curve, Look look, bool force)
     {
-        var look = Look;
-        var ramp = GammaRamp.Compose(State.AppliedCurve, look.Brightness, look.Kelvin);
-        if (!expected.SameAs(ramp)) Native.Apply(ramp, Dry);
-        expected = ramp;
+        var target = GammaRamp.Compose(curve, look.Brightness, look.Kelvin);
+        if (!force && lastTarget != null && lastTarget.SameAs(target)) return;
+        lastTarget = target;
+        if (Native.Apply(target, Dry)) { expected = target; AppliedKelvin = look.Kelvin; return; }
+        int Kelvin(double strength) => (int)Math.Round(Night.NeutralKelvin - strength * (Night.NeutralKelvin - look.Kelvin));
+        var neutral = GammaRamp.Compose(curve, look.Brightness, Night.NeutralKelvin);
+        double low = 0, high = 1;
+        if (!Native.Apply(neutral, Dry)) { Trace.WriteLine("gamma ramp refused even without warmth"); return; }
+        expected = neutral; AppliedKelvin = Night.NeutralKelvin;
+        for (int i = 0; i < 7; i++)
+        {
+            double mid = (low + high) / 2; var ramp = GammaRamp.Compose(curve, look.Brightness, Kelvin(mid));
+            if (Native.Apply(ramp, Dry)) { low = mid; expected = ramp; AppliedKelvin = Kelvin(mid); } else high = mid;
+        }
+        if (!Native.Apply(expected, Dry)) Trace.WriteLine("accepted ramp refused on reapply");
     }
     void Refresh(bool apply)
     {
         var state = State; var look = Look;
-        var ramp = GammaRamp.Compose(state.AppliedCurve, look.Brightness, look.Kelvin);
         // A game or driver may reset ramps; reapply whenever the readback drifts from what we set.
         bool mismatch = !Dry && !Native.Matches(expected);
-        if (!expected.SameAs(ramp) || (!ramp.IsIdentity && (apply || mismatch))) Native.Apply(ramp, Dry);
-        expected = ramp;
-        rampCheck = Dry ? "dry" : !Native.Matches(expected) ? "mismatch" : ramp.IsIdentity ? "identity" : "applied";
+        var target = GammaRamp.Compose(state.AppliedCurve, look.Brightness, look.Kelvin);
+        Push(state.AppliedCurve, look, mismatch || (apply && !target.IsIdentity));
+        rampCheck = Dry ? "dry" : !Native.Matches(expected) ? "mismatch" : expected.IsIdentity ? "identity" : AppliedKelvin != look.Kelvin ? "limited" : "applied";
         UpdateTray(); Changed?.Invoke(); WriteStatus();
     }
     void WriteStatus()
@@ -187,7 +201,7 @@ public partial class App : Application
         string tmp = statusPath + ".tmp";
         var look = Look;
         File.WriteAllText(tmp, JsonSerializer.Serialize(new { pid = Environment.ProcessId, exePath = exe, dataDir, updatedAt = DateTimeOffset.Now, dryGamma = Dry, state.Enabled, state.Period, state.ScheduledLevel, state.ActiveLevel, state.IsOverride, state.NextChange, state.AppliedCurve, userBrightness = Settings.UserBrightness,
-            warm = new { on = look.Warmth.On, factor = Math.Round(look.Warmth.Factor, 3), kelvin = look.Kelvin, target = Settings.WarmKelvin, held = look.Warmth.Held, nextChange = look.Warmth.NextChange, schedule = Settings.WarmSchedule },
+            warm = new { on = look.Warmth.On, factor = Math.Round(look.Warmth.Factor, 3), kelvin = look.Kelvin, appliedKelvin = AppliedKelvin, target = Settings.WarmKelvin, held = look.Warmth.Held, nextChange = look.Warmth.NextChange, schedule = Settings.WarmSchedule },
             dim = new { on = look.Dimming.On, factor = Math.Round(look.Dimming.Factor, 3), percent = Settings.DimPercent, schedule = Settings.DimSchedule, nextChange = look.Dimming.NextChange },
             brightness = Math.Round(look.Brightness, 2), expectedMid = new[] { expected.Red[128], expected.Green[128], expected.Blue[128] },
             rampMid = Dry ? null : Native.RampMid(), rampCheck, runKey = RunValue(), trayPinned = PinValue() }, Json));

@@ -46,10 +46,13 @@ internal static class Native
     [DllImport("dxva2.dll")] static extern bool DestroyPhysicalMonitor(IntPtr monitor);
 
     // Every attached display gets the same ramp, the way f.lux sets each monitor's DC.
-    public static void Apply(Rgb values, bool dry)
+    // Returns false when any display refuses the ramp (Windows bounds ramps unless GdiICMGammaRange is raised).
+    public static bool Apply(Rgb values, bool dry)
     {
-        if (dry) return;
-        Displays((dc, _) => { var ramp = new Ramp(values); SetDeviceGammaRamp(dc, ref ramp); });
+        if (dry) return true;
+        bool ok = true;
+        Displays((dc, _) => { var ramp = new Ramp(values); ok &= SetDeviceGammaRamp(dc, ref ramp); });
+        return ok;
     }
     public static bool Matches(Rgb values)
     {
