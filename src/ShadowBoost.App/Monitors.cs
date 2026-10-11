@@ -10,12 +10,20 @@ internal sealed record MonitorInfo(string Key, string Description, string? Model
 {
     internal VcpValue? Brightness => Values.GetValueOrDefault((byte)0x10);
     internal bool HasBrightness => Brightness is { Current: not null, Max: > 0, Error: null };
+    internal VcpValue? V(byte code) => Values.GetValueOrDefault(code);
+    /// <summary>The caps list the code and a read succeeded (the colour preset has no range, so no Max).</summary>
+    internal bool Works(byte code) => Caps.Has(code) && V(code) is { Current: not null, Error: null } v && (code == 0x14 || v.Max > 0);
+    internal bool HasGains => Works(0x16) && Works(0x18) && Works(0x1A);
+    /// <summary>How many of the codes the app drives this monitor lists.</summary>
+    internal int Controls => MonitorBus.Driven.Count(Caps.Has);
 }
 
 /// <summary>The only place that talks DDC/CI. Every call runs on one background thread, so the UI never blocks on a monitor.</summary>
 internal sealed class MonitorBus : IDisposable
 {
     const int MinGapMs = 60, SettleMs = 100;
+    /// <summary>The only codes the app ever writes: brightness, contrast, colour preset and RGB gains. Vendor and unlisted codes are never touched.</summary>
+    internal static readonly byte[] Driven = { 0x10, 0x12, 0x14, 0x16, 0x18, 0x1A };
     sealed class Entry
     {
         public string Key = "", Description = ""; public IntPtr Handle; public VcpCaps Caps = VcpCaps.Parse(null);
@@ -47,9 +55,11 @@ internal sealed class MonitorBus : IDisposable
     readonly object gate = new();
     readonly Queue<Action> jobs = new();
     readonly Dictionary<(string Key, byte Code), int> pending = new();
+    readonly List<(string Key, byte Code)> order = new();
     readonly List<Entry> entries = new();
     List<Action>? refreshDone;
     (string Key, byte Code)? writing;
+    bool running;
     readonly Thread thread;
     volatile IReadOnlyList<MonitorInfo> snapshot = Array.Empty<MonitorInfo>();
     bool disposed;
@@ -72,7 +82,16 @@ internal sealed class MonitorBus : IDisposable
         }
     }
     /// <summary>Queues a write; only the latest value per monitor and code is sent.</summary>
-    internal void Set(string key, byte code, int raw) { lock (gate) { if (disposed) return; pending[(key, code)] = raw; Monitor.PulseAll(gate); } }
+    internal void Set(string key, byte code, int raw)
+    {
+        lock (gate) { if (disposed || !Driven.Contains(code)) return; if (!pending.ContainsKey((key, code))) order.Add((key, code)); pending[(key, code)] = raw; Monitor.PulseAll(gate); }
+    }
+    /// <summary>Waits until queued work is done, for the neutral-gain write at exit.</summary>
+    internal void Drain(int timeoutMs)
+    {
+        var clock = Stopwatch.StartNew();
+        lock (gate) while (!disposed && (jobs.Count > 0 || pending.Count > 0 || running) && clock.ElapsedMilliseconds < timeoutMs) Monitor.Wait(gate, Math.Max(1, timeoutMs - (int)clock.ElapsedMilliseconds));
+    }
     /// <summary>Queues a read that updates Current and Max, then calls <paramref name="done"/> on the bus thread.</summary>
     internal void Read(string key, byte code, Action<VcpValue>? done = null)
     {
@@ -91,11 +110,12 @@ internal sealed class MonitorBus : IDisposable
                 while (!disposed && jobs.Count == 0 && pending.Count == 0) Monitor.Wait(gate);
                 if (disposed) break;
                 if (jobs.Count > 0) job = jobs.Dequeue();
-                else { var item = pending.First(); pending.Remove(item.Key); writing = item.Key; write = (item.Key.Key, item.Key.Code, item.Value); }
+                else { var next = order[0]; order.RemoveAt(0); var raw = pending[next]; pending.Remove(next); writing = next; write = (next.Key, next.Code, raw); }
+                running = true;
             }
             try { if (job != null) job(); else Write(write!.Value.Key, write.Value.Code, write.Value.Raw); }
             catch (Exception ex) { Trace.WriteLine(ex); }
-            finally { lock (gate) writing = null; }
+            finally { lock (gate) { writing = null; running = false; Monitor.PulseAll(gate); } }
         }
         foreach (var entry in entries) DestroyPhysicalMonitor(entry.Handle);
         entries.Clear();
@@ -145,7 +165,7 @@ internal sealed class MonitorBus : IDisposable
                 }
             }
             entry.Caps = VcpCaps.Parse(caps);
-            ReadValue(entry, 0x10, 2);
+            foreach (var code in Driven) if (code == 0x10 || entry.Caps.Has(code)) ReadValue(entry, code, 2);
         }
     }
 
@@ -189,8 +209,9 @@ internal sealed class MonitorBus : IDisposable
     {
         var entry = entries.Find(e => e.Key == key);
         if (entry == null) return;
+        if (!Driven.Contains(code) || (code != 0x10 && !entry.Caps.Has(code))) return;
         var known = entry.Values.GetValueOrDefault(code);
-        if (known is { Max: > 0 }) raw = Math.Clamp(raw, 0, known.Max);
+        if (code != 0x14 && known is { Max: > 0 }) raw = Math.Clamp(raw, 0, known.Max);
         Gap(entry);
         bool ok = SetVCPFeature(entry.Handle, code, (uint)Math.Max(0, raw));
         int error = Marshal.GetLastWin32Error(); entry.LastCommand = Stopwatch.GetTimestamp();

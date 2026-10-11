@@ -28,6 +28,18 @@ internal static class Glyph
         using var bitmap=Bitmap(on,dark,size); var handle=bitmap.GetHicon(); try { using var borrowed=Drawing.Icon.FromHandle(handle); return (Drawing.Icon)borrowed.Clone(); } finally { Native.DestroyIcon(handle); }
     }
 }
+// A fixed LG ULTRAGEAR+ (WK95U) for screenshots taken where no monitor answers DDC/CI.
+internal static class Sample
+{
+    const string Caps = "(prot(monitor)type(lcd)model(WK95U)cmds(01 02 03 0C E3 F3)vcp(02 04 05 08 10 12 14(05 08 0B ) 16 18 1A 52 60(11 12 0F 10 ) AC AE B2 B6 C0 C6 C8 C9 D6(01 04) DF 62 8D F4 F5(01 02 03 04) F6(00 01 02) 4D 4E 4F 15(01 06 11 13 14 15 18 19 20 22 23 24 28 29 32 48) F7(00 01 02 03) F8(00 01) F9 E4 E5 E6 E7 E8 E9 EA EB EF FA(00 01) FD(00 01) FE(00 01 02) FF)mccs_ver(2.1)mswhql(1))";
+    internal static readonly IReadOnlyList<MonitorInfo> Monitors = Build();
+    static IReadOnlyList<MonitorInfo> Build()
+    {
+        var caps = VcpCaps.Parse(Caps); VcpValue Value(int current, int max) => new(current, max, null, null, null);
+        var values = new Dictionary<byte, VcpValue> { [0x10] = Value(40, 100), [0x12] = Value(70, 100), [0x14] = Value(0x0B, 0), [0x16] = Value(50, 100), [0x18] = Value(50, 100), [0x1A] = Value(50, 100) };
+        return new[] { new MonitorInfo("sample", "Generic PnP Monitor", caps.Model, caps.Mccs, caps, values) };
+    }
+}
 internal static class Screenshots
 {
     // Renders hidden views to PNG without opening a window: 7 views per theme plus 2 tray glyphs per theme (18 files).

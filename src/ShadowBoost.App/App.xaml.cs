@@ -22,13 +22,25 @@ public partial class App : Application
     internal Look Look { get { var look = Night.Look(DateTimeOffset.Now, Settings, TimeZoneInfo.Local); return HardwareBrightness ? look with { Brightness = Level.Split(EffectiveLevel(look)).Ramp } : look; } }
     internal bool Dry, Isolated, Dark;
     MonitorBus? bus;
-    readonly Dictionary<string, int> sentRaw = new();
+    // The last raw value we sent (or adopted) per monitor and VCP code.
+    readonly Dictionary<(string Key, byte Code), int> sentRaw = new();
     int ticks;
+    bool gainsReset;
     internal IReadOnlyList<MonitorInfo> Monitors => bus?.Monitors ?? Array.Empty<MonitorInfo>();
     // Hardware mode: every display answers DDC/CI brightness. Otherwise the ramp alone scales brightness, as before.
     internal bool HardwareBrightness => Monitors.Count > 0 && Monitors.All(m => m.HasBrightness);
     // Before the first adoption the level comes from the primary monitor's current value and the saved ramp brightness.
     internal double SavedLevel => Settings.BrightnessLevel ?? Level.Join(Monitors.Count > 0 && Monitors[0].Brightness is { Current: int c } b ? Hardware.ToPercent(c, b.Max) : 0, Math.Clamp(Settings.UserBrightness, 50, 130));
+    MonitorSettings? Saved(MonitorInfo m) => Settings.Monitors.GetValueOrDefault(m.Key);
+    // A monitor can carry warmth in its RGB gains when it lists them and its preset is a user preset (or it has no presets).
+    bool GainsActive(MonitorInfo m) => m.HasGains && Saved(m) is { Gains: { Length: 3 } } s && (!m.Caps.Has(0x14) || (s.Preset is int p && Hardware.IsUserPreset(p)));
+    // Warmth goes to the hardware only when every display can take it; otherwise one shared ramp carries it for all.
+    internal bool HardwareWarmth => Monitors.Count > 0 && Monitors.All(GainsActive);
+    int RampKelvin(Look look) => HardwareWarmth ? Night.NeutralKelvin : look.Kelvin;
+    internal int ContrastPercent(MonitorInfo m) => Saved(m)?.Contrast ?? Hardware.ToPercent(m.V(0x12)?.Current ?? 0, m.V(0x12)?.Max ?? 0);
+    internal int PresetOf(MonitorInfo m) => Saved(m)?.Preset ?? m.V(0x14)?.Current ?? 0;
+    internal int[] NeutralGains(MonitorInfo m) => Saved(m)?.Gains is { Length: 3 } g ? g : new[] { m.V(0x16)?.Current ?? 0, m.V(0x18)?.Current ?? 0, m.V(0x1A)?.Current ?? 0 };
+    internal bool ShowGains(MonitorInfo m) => m.HasGains && (!m.Caps.Has(0x14) || Hardware.IsUserPreset(PresetOf(m)));
     double EffectiveLevel(Look look) => Level.Dim(SavedLevel, Night.DimScale(look.Dimming, Settings));
     internal string BrightnessShown(Look look) => HardwareBrightness ? Level.Label(EffectiveLevel(look)) : $"{Math.Round(look.Brightness)}%";
     string lastSaved = "";
@@ -68,7 +80,7 @@ public partial class App : Application
             catch (Exception ex) { Trace.WriteLine(ex); Environment.ExitCode = 1; }
             Shutdown(); return;
         }
-        string[] commands = { "--on", "--off", "--level", "--schedule", "--show", "--flyout", "--quit", "--screenshot", "--night", "--warmth", "--brightness", "--brightness-level" };
+        string[] commands = { "--on", "--off", "--level", "--schedule", "--show", "--flyout", "--quit", "--screenshot", "--night", "--warmth", "--brightness", "--brightness-level", "--contrast", "--gains", "--preset" };
         if (e.Args.Any(commands.Contains))
         {
             Native.AttachConsole(uint.MaxValue);
@@ -138,6 +150,7 @@ public partial class App : Application
         if (args.Contains("--off")) Engine.TurnOff(DateTimeOffset.Now);
         if (Enum.TryParse<LevelId>(Value(args, "--level"), true, out var level)) Engine.SetLevel(level, DateTimeOffset.Now);
         if (int.TryParse(Value(args, "--warmth"), out var kelvin)) { Settings.WarmKelvin = kelvin; Settings.Normalize(); Save(); }
+        MonitorCommands(args);
         if (int.TryParse(Value(args, "--brightness"), out var percent)) { if (HardwareBrightness) Settings.BrightnessLevel = Level.Below + Math.Clamp(percent, 0, Level.Span); else Settings.UserBrightness = percent; Settings.Normalize(); Save(); }
         if (double.TryParse(Value(args, "--brightness-level"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var levelValue) && double.IsFinite(levelValue)) { Settings.BrightnessLevel = levelValue; Settings.Normalize(); Save(); }
         switch (Value(args, "--night"))
@@ -181,59 +194,132 @@ public partial class App : Application
     // Applies the composed ramp and the monitor brightness without rebuilding views, for slider drags.
     void Apply() { Push(State.AppliedCurve, Look, false); ApplyHardware(); }
     void RefreshBus() => bus?.Refresh(() => Dispatcher.BeginInvoke(() => BusRefreshed()));
-    // After every bus refresh: the first time, adopt the monitor's current brightness as the saved level (no write, so installing never changes the display); then apply the saved level.
+    // After every bus refresh: the first time a monitor is seen, adopt its current values as the saved ones (no write, so installing never changes the display); then apply the saved values.
     void BusRefreshed()
     {
         if (quitting) return;
-        sentRaw.Clear();
-        if (HardwareBrightness)
-        {
-            foreach (var m in Monitors) Entry(m);
-            if (Settings.BrightnessLevel == null) { Settings.BrightnessLevel = SavedLevel; foreach (var m in Monitors) sentRaw[m.Key] = m.Brightness!.Current!.Value; Save(); return; }
-        }
-        Refresh(true);
-    }
-    static bool SameRaw(int a, int b, int max) => a == b || Hardware.ToPercent(a, max) == Hardware.ToPercent(b, max);
-    // Writes the hardware part of the effective level to each monitor whose target changed.
-    void ApplyHardware()
-    {
-        if (bus == null || !HardwareBrightness) return;
-        int percent = Level.Split(EffectiveLevel(Look)).Hardware;
+        sentRaw.Clear(); bool adopted = false;
         foreach (var m in Monitors)
         {
-            int max = m.Brightness!.Max, raw = Hardware.ToRaw(percent, max);
-            if (sentRaw.TryGetValue(m.Key, out var last) && SameRaw(last, raw, max)) continue;
-            sentRaw[m.Key] = raw; bus.Set(m.Key, 0x10, raw);
+            var entry = Entry(m);
+            if (m.Works(0x12) && entry.Contrast == null) { entry.Contrast = Hardware.ToPercent(m.V(0x12)!.Current!.Value, m.V(0x12)!.Max); adopted = true; }
+            if (m.Works(0x14) && entry.Preset == null) { entry.Preset = m.V(0x14)!.Current!.Value; adopted = true; }
+            if (m.HasGains && entry.Gains == null) { entry.Gains = new[] { m.V(0x16)!.Current!.Value, m.V(0x18)!.Current!.Value, m.V(0x1A)!.Current!.Value }; entry.DefaultGains ??= entry.Gains.ToArray(); adopted = true; }
         }
+        if (HardwareBrightness && Settings.BrightnessLevel == null) { Settings.BrightnessLevel = SavedLevel; adopted = true; }
+        if (adopted) Save(); else Refresh(true);
+    }
+    // Contrast and brightness compare by percent so a 0..255 monitor's rounding never causes a write; presets and gains compare exactly.
+    static bool SameRaw(int a, int b, int max) => a == b || (max > 0 && Hardware.ToPercent(a, max) == Hardware.ToPercent(b, max));
+    void Send(MonitorInfo m, byte code, int raw, bool percent)
+    {
+        int max = m.V(code)?.Max ?? 0, baseline = sentRaw.TryGetValue((m.Key, code), out var last) ? last : m.V(code)?.Current ?? -1;
+        if (baseline >= 0 && (percent ? SameRaw(baseline, raw, max) : baseline == raw)) { sentRaw[(m.Key, code)] = baseline; return; }
+        sentRaw[(m.Key, code)] = raw; bus!.Set(m.Key, code, raw);
+    }
+    // Writes the saved values to each monitor whose target changed: brightness, contrast, preset, then gains (the neutral gains with the schedule's warmth on top).
+    void ApplyHardware()
+    {
+        if (bus == null || gainsReset) return;
+        var look = Look;
+        int percent = HardwareBrightness ? Level.Split(EffectiveLevel(look)).Hardware : -1;
+        foreach (var m in Monitors)
+        {
+            if (percent >= 0) Send(m, 0x10, Hardware.ToRaw(percent, m.Brightness!.Max), true);
+            if (Saved(m) is not { } s) continue;
+            if (s.Contrast is int c && m.Works(0x12)) Send(m, 0x12, Hardware.ToRaw(c, m.V(0x12)!.Max), true);
+            if (s.Preset is int p && m.Works(0x14)) Send(m, 0x14, p, false);
+            if (!GainsActive(m)) continue;
+            var neutral = (s.Gains![0], s.Gains[1], s.Gains[2]);
+            var (r, g, b) = HardwareWarmth ? Hardware.WarmGains(neutral, look.Kelvin, new[] { 0x16, 0x18, 0x1A }.Min(code => m.V((byte)code)!.Max)) : neutral;
+            Send(m, 0x16, r, false); Send(m, 0x18, g, false); Send(m, 0x1A, b, false);
+        }
+    }
+    // Warmth is the app's effect and the neutral gains are the user's setting, so exit puts the neutral gains back; brightness and contrast stay as set.
+    void RestoreNeutralGains()
+    {
+        if (bus == null || gainsReset) return;
+        gainsReset = true;
+        try
+        {
+            foreach (var m in Monitors)
+                if (GainsActive(m))
+                    for (int channel = 0; channel < 3; channel++)
+                    {
+                        byte code = (byte)(0x16 + 2 * channel); int neutral = Saved(m)!.Gains![channel];
+                        if (sentRaw.TryGetValue((m.Key, code), out var sent) && sent != neutral) bus.Set(m.Key, code, neutral);
+                    }
+            bus.Drain(2500);
+        }
+        catch (Exception ex) { Trace.WriteLine(ex); }
+    }
+    MonitorInfo? Find(string key) => Monitors.FirstOrDefault(m => m.Key == key);
+    internal void SetContrast(string key, int percent) { if (Find(key) is { } m && m.Works(0x12)) { Entry(m).Contrast = Math.Clamp(percent, 0, 100); Live(); } }
+    internal void SetPreset(string key, int value) { if (Find(key) is { } m && m.Works(0x14)) { Entry(m).Preset = value; Save(); } }
+    internal void SetGain(string key, int channel, int percent)
+    {
+        if (Find(key) is not { } m || !m.HasGains || Entry(m).Gains is not { Length: 3 } gains) return;
+        gains[channel] = Hardware.ToRaw(percent, m.V((byte)(0x16 + 2 * channel))!.Max); Live();
+    }
+    internal void ResetGains(string key) { if (Find(key) is { } m && Entry(m) is { DefaultGains: { Length: 3 } d } entry) { entry.Gains = d.ToArray(); Save(); } }
+    // --contrast <0-100>, --gains <r,g,b> (percent of max) and --preset <hex> apply to every monitor that supports them.
+    void MonitorCommands(string[] args)
+    {
+        bool changed = false;
+        if (int.TryParse(Value(args, "--contrast"), out var contrast))
+            foreach (var m in Monitors.Where(x => x.Works(0x12))) { Entry(m).Contrast = Math.Clamp(contrast, 0, 100); changed = true; }
+        var parts = Value(args, "--gains")?.Split(',');
+        if (parts is { Length: 3 } && parts.Select(x => int.TryParse(x, out _)).All(ok => ok))
+            foreach (var m in Monitors.Where(x => x.HasGains)) { Entry(m).Gains = parts.Select((x, i) => Hardware.ToRaw(int.Parse(x), m.V((byte)(0x16 + 2 * i))!.Max)).ToArray(); changed = true; }
+        if (int.TryParse(Value(args, "--preset"), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out var preset))
+            foreach (var m in Monitors.Where(x => x.Works(0x14) && x.Caps.Codes[0x14] is { } list && list.Contains(preset))) { Entry(m).Preset = preset; changed = true; }
+        if (changed) Save();
     }
     // Every 30 s: retry the bus while any display lacks DDC/CI; otherwise a monitor that no longer holds what we sent was changed with its own buttons.
     void PollMonitors()
     {
         if (bus == null) return;
-        if (!HardwareBrightness) { RefreshBus(); return; }
+        if (Monitors.Count == 0 || !HardwareBrightness) RefreshBus();
         foreach (var m in Monitors)
-        {
-            string key = m.Key; int? sent = sentRaw.TryGetValue(key, out var s) ? s : null;
-            bus.Read(key, 0x10, v => Dispatcher.BeginInvoke(() => Adopt(key, sent, v)));
-        }
+            foreach (byte code in MonitorBus.Driven)
+            {
+                if (code == 0x10 ? !HardwareBrightness : !m.Works(code)) continue;
+                string key = m.Key; int? sent = sentRaw.TryGetValue((key, code), out var s) ? s : null;
+                bus.Read(key, code, v => Dispatcher.BeginInvoke(() => Adopt(key, code, sent, v)));
+            }
     }
-    void Adopt(string key, int? sentAtRead, VcpValue v)
+    void Adopt(string key, byte code, int? sentAtRead, VcpValue v)
     {
-        if (bus == null || quitting || !HardwareBrightness || v.Error != null || v.Current is not int now || v.Max <= 0) return;
-        if (!sentRaw.TryGetValue(key, out var sent) || sentAtRead != sent || bus.Busy(key) || SameRaw(sent, now, v.Max)) return;
-        double scale = Night.DimScale(Look.Dimming, Settings), ramp = Level.Split(Level.Dim(SavedLevel, scale)).Ramp;
-        Settings.BrightnessLevel = Math.Clamp(Level.Join(Hardware.ToPercent(now, v.Max), ramp) / (scale > 0 ? scale : 1), 0, Level.Max);
-        sentRaw[key] = now; Save();
+        if (bus == null || quitting || v.Error != null || v.Current is not int now || Find(key) is not { } m) return;
+        if (code == 0x10 ? !HardwareBrightness || v.Max <= 0 : !m.Works(code)) return;
+        bool percent = code is 0x10 or 0x12;
+        if (!sentRaw.TryGetValue((key, code), out var sent) || sentAtRead != sent || bus.Busy(key) || (percent ? SameRaw(sent, now, v.Max) : sent == now)) return;
+        var look = Look; var entry = Entry(m);
+        switch (code)
+        {
+            case 0x10:
+                double scale = Night.DimScale(look.Dimming, Settings), ramp = Level.Split(Level.Dim(SavedLevel, scale)).Ramp;
+                Settings.BrightnessLevel = Math.Clamp(Level.Join(Hardware.ToPercent(now, v.Max), ramp) / (scale > 0 ? scale : 1), 0, Level.Max); break;
+            case 0x12: entry.Contrast = Hardware.ToPercent(now, v.Max); break;
+            case 0x14: entry.Preset = now; break;
+            default:
+                // Gains read back carry the schedule's warmth; undo it to get the neutral gain the user set.
+                int channel = (code - 0x16) / 2; var (wr, wg, wb) = HardwareWarmth ? GammaRamp.WhitePoint(look.Kelvin) : (1.0, 1.0, 1.0);
+                double white = channel == 0 ? wr : channel == 1 ? wg : wb;
+                if (entry.Gains is { Length: 3 } gains) gains[channel] = (int)Math.Round(now / (white > 0 ? white : 1)); break;
+        }
+        sentRaw[(key, code)] = now; Save();
     }
     // Sets the ramp for this look. When Windows refuses it, keep brightness and boost and search for the
     // warmest white point it accepts, so a refused warm ramp never leaves the display at identity.
     void Push(Curve? curve, Look look, bool force)
     {
-        var target = GammaRamp.Compose(curve, look.Brightness, look.Kelvin);
+        int warm = RampKelvin(look);
+        var target = GammaRamp.Compose(curve, look.Brightness, warm);
         if (!force && lastTarget != null && lastTarget.SameAs(target)) return;
         lastTarget = target;
-        if (Native.Apply(target, Dry)) { expected = target; AppliedKelvin = look.Kelvin; return; }
-        int Kelvin(double strength) => (int)Math.Round(Night.NeutralKelvin - strength * (Night.NeutralKelvin - look.Kelvin));
+        if (Native.Apply(target, Dry)) { expected = target; AppliedKelvin = warm; return; }
+        int Kelvin(double strength) => (int)Math.Round(Night.NeutralKelvin - strength * (Night.NeutralKelvin - warm));
         var neutral = GammaRamp.Compose(curve, look.Brightness, Night.NeutralKelvin);
         double low = 0, high = 1;
         if (!Native.Apply(neutral, Dry)) { Trace.WriteLine("gamma ramp refused even without warmth"); return; }
@@ -251,11 +337,12 @@ public partial class App : Application
         var state = State; var look = Look;
         // A game or driver may reset ramps; reapply whenever the readback drifts from what we set.
         bool mismatch = !Dry && !Native.Matches(expected);
-        var target = GammaRamp.Compose(state.AppliedCurve, look.Brightness, look.Kelvin);
+        var target = GammaRamp.Compose(state.AppliedCurve, look.Brightness, RampKelvin(look));
         Push(state.AppliedCurve, look, mismatch || (apply && !target.IsIdentity));
-        rampCheck = Dry ? "dry" : !Native.Matches(expected) ? "mismatch" : expected.IsIdentity ? "identity" : AppliedKelvin != look.Kelvin ? "limited" : "applied";
+        rampCheck = Dry ? "dry" : !Native.Matches(expected) ? "mismatch" : expected.IsIdentity ? "identity" : AppliedKelvin != RampKelvin(look) ? "limited" : "applied";
         UpdateTray(); Changed?.Invoke(); WriteStatus();
     }
+    static int?[] GainValues(MonitorInfo m, Func<VcpValue?, int?> pick) => new byte[] { 0x16, 0x18, 0x1A }.Select(code => pick(m.V(code))).ToArray();
     void WriteStatus()
     {
         var state = State;
@@ -267,7 +354,11 @@ public partial class App : Application
             dim = new { on = look.Dimming.On, factor = Math.Round(look.Dimming.Factor, 3), percent = Settings.DimPercent, schedule = Settings.DimSchedule, nextChange = look.Dimming.NextChange },
             brightness = Math.Round(look.Brightness, 2), brightnessSource = HardwareBrightness ? "monitor" : "gamma", brightnessLevel = Settings.BrightnessLevel, effectiveLevel = HardwareBrightness ? EffectiveLevel(look) : (double?)null, rampBrightness = Math.Round(look.Brightness, 2),
             monitors = Monitors.Select(m => new { m.Key, m.Description, m.Model, m.Mccs, codes = string.Join(" ", m.Caps.Codes.Keys.Order().Select(c => c.ToString("X2"))),
-                brightness = new { target = m.Brightness?.Target, current = m.Brightness?.Current, max = m.Brightness?.Max, readback = m.Brightness?.Readback, error = m.Brightness?.Error } }).ToList(),
+                brightness = new { target = m.Brightness?.Target, current = m.Brightness?.Current, max = m.Brightness?.Max, readback = m.Brightness?.Readback, error = m.Brightness?.Error },
+                contrast = new { percent = Saved(m)?.Contrast, target = m.V(0x12)?.Target, current = m.V(0x12)?.Current, max = m.V(0x12)?.Max, readback = m.V(0x12)?.Readback, error = m.V(0x12)?.Error },
+                preset = m.Caps.Has(0x14) ? new { value = (int?)PresetOf(m), name = Hardware.PresetName(PresetOf(m)) } : null,
+                gains = m.Caps.Has(0x16) ? new { neutral = Saved(m)?.Gains, target = GainValues(m, v => v?.Target), current = GainValues(m, v => v?.Current), readback = GainValues(m, v => v?.Readback) } : null,
+                warmth = HardwareWarmth ? "monitor" : "gamma", warmthOnMonitor = GainsActive(m) }).ToList(),
             expectedMid = new[] { expected.Red[128], expected.Green[128], expected.Blue[128] },
             rampMid = Dry ? null : Native.RampMid(), rampCheck, runKey = RunValue(), trayPinned = PinValue() }, Json));
         File.Move(tmp, statusPath, true);
@@ -364,13 +455,13 @@ public partial class App : Application
     void PowerChanged(object s, PowerModeChangedEventArgs e) { if (e.Mode == PowerModes.Resume) { _ = Task.Delay(3000).ContinueWith(_ => RefreshBus()); TimeChanged(s, e); } }
     void ThemeChanged(object s, UserPreferenceChangedEventArgs e) => Dispatcher.BeginInvoke(() => { ApplyTheme(); Refresh(false); });
     static Rgb Neutral => GammaRamp.Compose(null, 100, Night.NeutralKelvin);
-    void OnSessionEnding(object s, SessionEndingEventArgs e) => Native.Apply(Neutral, Dry);
-    void ProcessExit(object? s, EventArgs e) => Native.Apply(Neutral, Dry);
+    void OnSessionEnding(object s, SessionEndingEventArgs e) { RestoreNeutralGains(); Native.Apply(Neutral, Dry); }
+    void ProcessExit(object? s, EventArgs e) { RestoreNeutralGains(); Native.Apply(Neutral, Dry); }
     internal void Quit()
     {
         if (saveDebounce?.IsEnabled == true) { saveDebounce.Stop(); Save(); }
         quitting = true; timer?.Stop(); stopping.Cancel(); watcher?.Dispose(); debounce?.Stop();
-        Native.Apply(Neutral, Dry);
+        RestoreNeutralGains(); Native.Apply(Neutral, Dry);
         Engine.TurnOff(DateTimeOffset.Now); rampCheck = Dry ? "dry" : "identity"; WriteStatus();
         if (hotkey != null) { if (!Isolated && !Dry) { Native.UnregisterHotKey(hotkey.Handle, 1); Native.UnregisterHotKey(hotkey.Handle, 2); } hotkey.Dispose(); }
         tray?.Dispose(); trayImage?.Dispose(); bus?.Dispose();

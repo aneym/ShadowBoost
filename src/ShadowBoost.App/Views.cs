@@ -126,7 +126,7 @@ public sealed class FlyoutView : UserControl
         body.Children.Add(new Border { Margin = new Thickness(16,14,16,0), Child = big });
         string copy = UI.WarmCopy(look, settings);
         // Windows bounds gamma ramps unless the expanded range is enabled; say what the display really shows.
-        if (snapshot == null && look.Warmth.On && app.AppliedKelvin > look.Kelvin) copy += $" Windows allows {app.AppliedKelvin} K on this display.";
+        if (snapshot == null && look.Warmth.On && !app.HardwareWarmth && app.AppliedKelvin > look.Kelvin) copy += $" Windows allows {app.AppliedKelvin} K on this display.";
         body.Children.Add(new Border { Margin = new Thickness(16,2,16,0), Child = UI.Text(copy,13,"Text2") });
         body.Children.Add(new Border { Margin = new Thickness(16,16,16,0), Child = UI.WarmSlider(app, "Warmth") });
         body.Children.Add(new Border { Margin = new Thickness(16,16,16,0), Child = UI.BrightnessSlider(app, "BrightnessSlider") });
@@ -181,8 +181,37 @@ public sealed class MainView : UserControl
         page.Children.Add(UI.Row(UI.Caption("Start at sign-in","Warmth resumes; shadow boost stays off"), UI.Switch(settings.StartAtSignIn, () => { settings.StartAtSignIn = !settings.StartAtSignIn; app.Save(); })));
         string levels = string.Join(" · ", Enum.GetValues<Period>().Select(p => $"{p} {settings.PeriodLevels[p]}"));
         page.Children.Add(UI.Row(UI.Caption("Shadow boost", (app.State.Enabled ? "On · " : "Off · ") + levels), UI.Link("›",app.BoostPage)));
+        MonitorSection(page);
         var bg = new Border { Child = page }; bg.SetResourceReference(Border.BackgroundProperty,"Bg");
         Content = snapshot != null ? bg : new ScrollViewer { Content = bg, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+    }
+    // One block per monitor with the DDC/CI controls it lists. Brightness is not here: it is the one slider above. Screenshots without a monitor draw a sample.
+    void MonitorSection(StackPanel page)
+    {
+        var list = (snapshot != null && app.Monitors.Count == 0 ? Sample.Monitors : app.Monitors).Where(m => m.Works(0x12) || m.Works(0x14) || m.HasGains).ToList();
+        if (list.Count == 0) return;
+        UI.Section(page, "Monitor");
+        string[] names = { "Red", "Green", "Blue" };
+        for (int i = 0; i < list.Count; i++)
+        {
+            var m = list[i]; string key = m.Key, suffix = i == 0 ? "" : (i + 1).ToString();
+            page.Children.Add(UI.Row(UI.Caption(m.Model ?? m.Description, $"DDC/CI · MCCS {m.Mccs ?? "?"} · {m.Controls} control{(m.Controls == 1 ? "" : "s")}"), null, i == 0));
+            if (m.Works(0x12)) page.Children.Add(UI.Row(UI.Slider("Contrast", 0, 100, app.ContrastPercent(m), n => n + "%", n => app.SetContrast(key, n), "ContrastSlider" + suffix, large: true), null));
+            if (m.Works(0x14) && m.Caps.Codes[0x14] is { Count: > 0 } presets)
+            {
+                int current = app.PresetOf(m);
+                string note = m.HasGains && Hardware.IsUserPreset(current) ? "Warmth follows the schedule on this monitor" : "Warmth uses the screen ramp";
+                page.Children.Add(UI.Row(UI.Caption("Colour mode", note), UI.Choice(presets.ToList(), current, Hardware.PresetName, v => app.SetPreset(key, v), Math.Min(70 * presets.Count, 300), true, "Preset" + suffix)));
+            }
+            if (!app.ShowGains(m)) continue;
+            var gains = app.NeutralGains(m);
+            for (int channel = 0; channel < 3; channel++)
+            {
+                int c = channel, max = m.V((byte)(0x16 + 2 * c))!.Max;
+                page.Children.Add(UI.Row(UI.Slider(names[c], 0, 100, Hardware.ToPercent(gains[c], max), n => n + "%", n => app.SetGain(key, c, n), names[c] + "GainSlider" + suffix, large: true), null));
+            }
+            page.Children.Add(UI.Row(UI.Caption("Reset gains", "Back to the values read at first sight"), UI.Link("Reset", () => { app.ResetGains(key); Build(); })));
+        }
     }
     void Plan(StackPanel page, NightKind kind)
     {

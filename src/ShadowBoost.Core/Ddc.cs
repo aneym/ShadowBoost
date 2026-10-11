@@ -88,5 +88,20 @@ public static class Hardware
 {
     public static int ToRaw(int percent, int max) => (int)Math.Round(Math.Clamp(percent, 0, 100) * max / 100.0, MidpointRounding.AwayFromZero);
     public static int ToPercent(int raw, int max) => max <= 0 ? 0 : Math.Clamp((int)Math.Round(raw * 100.0 / max, MidpointRounding.AwayFromZero), 0, 100);
+    /// <summary>MCCS 0x14 colour preset names.</summary>
+    public static string PresetName(int value) => value switch
+    {
+        0x01 => "sRGB", 0x02 => "Native", 0x03 => "4000 K", 0x04 => "5000 K", 0x05 => "6500 K", 0x06 => "7500 K", 0x07 => "8200 K",
+        0x08 => "9300 K", 0x09 => "10000 K", 0x0A => "11500 K", 0x0B => "User 1", 0x0C => "User 2", 0x0D => "User 3",
+        _ => $"Preset 0x{value:X2}"
+    };
+    public static bool IsUserPreset(int value) => value is >= 0x0B and <= 0x0D;
+    /// <summary>The user's neutral RGB gains scaled by the same white point the gamma ramp uses for <paramref name="kelvin"/>.</summary>
+    public static (int R, int G, int B) WarmGains((int R, int G, int B) neutral, int kelvin, int max)
+    {
+        var (r, g, b) = GammaRamp.WhitePoint(kelvin);
+        int Scale(int gain, double factor) => Math.Clamp((int)Math.Round(gain * factor, MidpointRounding.AwayFromZero), 0, Math.Max(max, 0));
+        return (Scale(neutral.R, r), Scale(neutral.G, g), Scale(neutral.B, b));
+    }
     public static int Dimmed(int percent, double dimScale) => Math.Clamp((int)Math.Round(percent * dimScale, MidpointRounding.AwayFromZero), 0, 100);
 }

@@ -12,6 +12,14 @@ public sealed record Curve(int BlackLift, int Gamma, int Contrast, int Brightnes
 public sealed class MonitorSettings
 {
     public string? Model { get; set; }
+    /// <summary>Percent of the contrast (0x12) range.</summary>
+    public int? Contrast { get; set; }
+    /// <summary>Neutral red, green, blue video gains (0x16, 0x18, 0x1A) as raw values; warmth is applied on top of them.</summary>
+    public int[]? Gains { get; set; }
+    /// <summary>The gains read when the monitor was first seen, for Reset.</summary>
+    public int[]? DefaultGains { get; set; }
+    /// <summary>Raw colour preset (0x14) value.</summary>
+    public int? Preset { get; set; }
 }
 
 public sealed class Settings
@@ -113,6 +121,8 @@ public sealed class Settings
         return settings;
     }
 
+    private static int[]? Gains(int[]? gains) => gains is { Length: 3 } ? gains.Select(g => Math.Clamp(g, 0, 65535)).ToArray() : null;
+
     public void Normalize()
     {
         var defaults = new Settings();
@@ -138,6 +148,12 @@ public sealed class Settings
         Monitors ??= new();
         foreach (var (key, monitor) in Monitors.ToList())
             if (monitor == null) Monitors[key] = new();
+            else
+            {
+                if (monitor.Contrast.HasValue) monitor.Contrast = Math.Clamp(monitor.Contrast.Value, 0, 100);
+                if (monitor.Preset.HasValue) monitor.Preset = Math.Clamp(monitor.Preset.Value, 0, 255);
+                monitor.Gains = Gains(monitor.Gains); monitor.DefaultGains = Gains(monitor.DefaultGains);
+            }
     }
 
     private sealed class ClockConverter : JsonConverter<TimeOnly>

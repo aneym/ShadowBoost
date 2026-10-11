@@ -32,7 +32,28 @@ and kept. Warmth and shadow boost still use the gamma ramp. When any display
 does not answer DDC/CI (or with `--dry-gamma`) the slider scales the gamma ramp
 alone (50-130 %) and the bus is retried every 30 seconds. Exiting leaves the
 monitor's brightness alone. `status.json` lists each monitor, its capabilities,
-the brightness source (`monitor` or `gamma`) and the level split.
+the brightness source (`monitor` or `gamma`) the level split, and per monitor the contrast, preset, gains and whether warmth runs on the `monitor` or the `gamma` ramp.
+
+Monitor controls (main window, Monitor section, one block per monitor that
+answers DDC/CI) cover only what the monitor's capabilities string lists:
+contrast (VCP 0x12), colour mode (0x14, the listed presets by name) and, for a
+user preset, the red, green and blue gains (0x16, 0x18, 0x1A) with a Reset to
+the values read at first sight. With brightness (0x10) these six are the only
+codes ShadowBoost ever writes; codes the monitor does not list and vendor codes
+are never touched. Like brightness, each value is adopted from the monitor the
+first time it is seen (no write), saved per monitor, applied at start and
+re-read every 30 seconds so changes made with the monitor's buttons stick.
+`--contrast <0-100>`, `--gains <r,g,b>` (percent of each gain's range) and
+`--preset <hex>` set them on every monitor that supports them.
+
+Warmth goes to the hardware when every display can take it: each lists the
+three gains and is on a user preset (or has no presets). The schedule, fades and
+`--warmth` then scale the neutral gains by the same white point the gamma ramp
+uses, and the ramp carries no warmth. If any display cannot, the shared gamma
+ramp warms all of them as before (the "Windows allows N K" limit applies only to
+that case), and picking a non-user colour mode turns hardware warmth off for
+that monitor, so the ramp warms it. On exit the neutral gains are written back;
+brightness and contrast stay as set.
 
 Shadow boost is **off on every start**, including sign-in; warmth, dimming and
 brightness resume from the saved settings.
@@ -74,7 +95,7 @@ use both and `--tray`, never `--show` or `--flyout`.
 
 `--screenshot <directory>` renders hidden 2x light/dark views (the live
 flyout, warm, daylight and boost flyouts, main, shadow boost and fine-tune) and
-32px on/off tray glyphs (18 PNGs), without opening a window.
+32px on/off tray glyphs (18 PNGs), without opening a window. When no monitor answers DDC/CI (for example with `--dry-gamma`) the main view shows a sample LG monitor in the Monitor section.
 
 Settings live in `%APPDATA%\ShadowBoost\settings.json`; status is atomically
 written to `%LOCALAPPDATA%\ShadowBoost\status.json`. With `--home`, both are in

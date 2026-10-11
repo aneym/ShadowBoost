@@ -324,7 +324,7 @@ public sealed class CoreTests
             };
             settings.PeriodLevels[Period.Day] = LevelId.Gentle;
             settings.Curves[LevelId.Balanced] = new(9, 80, 117, 100);
-            settings.Monitors["GSM780E#5&20e287fe&0&UID4352"] = new() { Model = "WK95U" }; settings.BrightnessLevel = 112.5;
+            settings.Monitors["GSM780E#5&20e287fe&0&UID4352"] = new() { Model = "WK95U", Contrast = 70, Gains = new[] { 50, 48, 52 }, DefaultGains = new[] { 50, 50, 50 }, Preset = 0x0B }; settings.BrightnessLevel = 112.5;
             settings.Save(path);
             var json = File.ReadAllText(path);
             Assert.Contains("\"nightStart\": \"01:15\"", json);
@@ -344,6 +344,9 @@ public sealed class CoreTests
             Assert.Equal(settings.Curves.OrderBy(p => p.Key), loaded.Curves.OrderBy(p => p.Key));
             var monitor = Assert.Single(loaded.Monitors);
             Assert.Equal(("GSM780E#5&20e287fe&0&UID4352", "WK95U", 112.5), (monitor.Key, monitor.Value.Model, loaded.BrightnessLevel));
+            Assert.Equal((70, 0x0B), (monitor.Value.Contrast, monitor.Value.Preset));
+            Assert.Equal(new[] { 50, 48, 52 }, monitor.Value.Gains);
+            Assert.Equal(new[] { 50, 50, 50 }, monitor.Value.DefaultGains);
             File.WriteAllText(path, "{\"warmKelvin\":9000,\"dimPercent\":5}");
             loaded = Settings.Load(path);
             Assert.Equal((6500, 30, NightSchedule.Sunset), (loaded.WarmKelvin, loaded.DimPercent, loaded.WarmSchedule));
@@ -356,6 +359,11 @@ public sealed class CoreTests
             loaded = Settings.Load(path);
             Assert.Equal(180, loaded.BrightnessLevel);
             Assert.All(new[] { "c", "d" }, k => Assert.NotNull(loaded.Monitors[k]));
+            File.WriteAllText(path, "{\"monitors\":{\"a\":{\"contrast\":140,\"preset\":999,\"gains\":[1,2],\"defaultGains\":[-4,70000,5]},\"b\":{\"contrast\":-3}}}");
+            loaded = Settings.Load(path);
+            Assert.Equal((100, 255, null), (loaded.Monitors["a"].Contrast, loaded.Monitors["a"].Preset, loaded.Monitors["a"].Gains));
+            Assert.Equal(new[] { 0, 65535, 5 }, loaded.Monitors["a"].DefaultGains);
+            Assert.Equal(0, loaded.Monitors["b"].Contrast);
             File.WriteAllText(path, "{\"brightnessLevel\":-7}");
             Assert.Equal(0, Settings.Load(path).BrightnessLevel);
             File.WriteAllText(path, "{\"monitors\":null}");
@@ -474,6 +482,34 @@ public sealed class CoreTests
         Assert.Equal("0% · ramp 75%", Level.Label(25));
         Assert.Equal("100% · ramp 115%", Level.Label(165));
         Assert.Equal(80, Level.Dim(160, 0.5));
+    }
+
+    [Theory]
+    [InlineData(0x05, "6500 K")]
+    [InlineData(0x0B, "User 1")]
+    [InlineData(0x01, "sRGB")]
+    [InlineData(0x2A, "Preset 0x2A")]
+    public void PresetNames(int value, string name) => Assert.Equal(name, Hardware.PresetName(value));
+
+    [Fact]
+    public void UserPresetsAreOnlyTheUserSlots() => Assert.Equal(new[] { 0x0B, 0x0C, 0x0D }, Enumerable.Range(0, 256).Where(Hardware.IsUserPreset));
+
+    // Guards that hardware warmth reuses the ramp's white point: neutral at 6500 K, red last to drop, blue first, never outside the range.
+    [Fact]
+    public void WarmGainsFollowTheWhitePoint()
+    {
+        Assert.Equal((50, 48, 52), Hardware.WarmGains((50, 48, 52), 6500, 100));
+        var warm = Hardware.WarmGains((50, 50, 50), 2700, 100);
+        Assert.True(warm.R >= warm.G && warm.G > warm.B && warm.B >= 0, warm.ToString());
+        Assert.Equal((100, 100, 100), Hardware.WarmGains((200, 200, 200), 6500, 100));
+        (int R, int G, int B) previous = (255, 255, 255);
+        for (int kelvin = 6500; kelvin >= 2700; kelvin -= 100)
+        {
+            var gains = Hardware.WarmGains((255, 255, 255), kelvin, 255);
+            Assert.True(gains.R <= previous.R && gains.G <= previous.G && gains.B <= previous.B, $"{kelvin} K");
+            Assert.All(new[] { gains.R, gains.G, gains.B }, g => Assert.InRange(g, 0, 255));
+            previous = gains;
+        }
     }
 
     // Guards that the dim scale used for the monitor is the same one Look applies to the ramp brightness.
