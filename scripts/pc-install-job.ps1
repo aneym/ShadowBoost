@@ -61,12 +61,15 @@ Write-Output "installed sha256 $((Get-FileHash $exe -Algorithm SHA256).Hash); pr
 Write-Output "processes: $($procs.Count) ($($procs.Id -join ',')); run key: $run"
 $s = Get-Content $status -Raw | ConvertFrom-Json
 Write-Output "status: boost enabled=$($s.enabled) warm on=$($s.warm.on) kelvin=$($s.warm.kelvin) held=$($s.warm.held) next=$($s.warm.nextChange) brightness=$($s.brightness) rampCheck=$($s.rampCheck) expectedMid=$($s.expectedMid -join ',') rampMid=$($s.rampMid -join ',')"
-# The taskbar pin followed the legacy rename; point it back at the installed exe (backup kept).
-$pin = Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\ShadowBoost.lnk'
-if (Test-Path $pin) {
-    $shell = New-Object -ComObject WScript.Shell; $lnk = $shell.CreateShortcut($pin)
-    if ($lnk.TargetPath -ne $exe) { Copy-Item $pin (Join-Path $evidence 'ShadowBoost.lnk.bak'); $was = $lnk.TargetPath; $lnk.TargetPath = $exe; $lnk.Arguments = ''; $lnk.WorkingDirectory = $dir; $lnk.Save(); Write-Output "taskbar pin: $was -> $exe" }
-    else { Write-Output "taskbar pin already targets $exe" }
+# The taskbar pin followed the legacy rename; point it and any Start Menu shortcut at the installed exe (backups kept),
+# then read every target back.
+$shell = New-Object -ComObject WScript.Shell
+$links = @(Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\ShadowBoost.lnk')
+$links += @(Get-ChildItem (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs') -Recurse -Filter '*ShadowBoost*.lnk' -ErrorAction SilentlyContinue | ForEach-Object FullName)
+foreach ($path in ($links | Where-Object { Test-Path $_ } | Select-Object -Unique)) {
+    $lnk = $shell.CreateShortcut($path)
+    if ($lnk.TargetPath -ne $exe) { Copy-Item $path (Join-Path $evidence ((Split-Path $path -Leaf) + '.' + [guid]::NewGuid().ToString('N').Substring(0,6) + '.bak')); $was = $lnk.TargetPath; $lnk.TargetPath = $exe; $lnk.Arguments = ''; $lnk.WorkingDirectory = $dir; $lnk.Save(); Write-Output "shortcut $path : $was -> $exe" }
+    Write-Output "shortcut read-back $path -> $($shell.CreateShortcut($path).TargetPath)"
 }
 $rendered = Join-Path $evidence 'rendered'
 Start-Process -FilePath $exe -ArgumentList @('--screenshot', ('"' + $rendered + '"')) -Wait
