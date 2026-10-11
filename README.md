@@ -76,9 +76,14 @@ dotnet publish src/ShadowBoost.App/ShadowBoost.App.csproj -c Release -r win-x64 
 
 On macOS the core tests run with `dotnet test tests/ShadowBoost.Core.Tests`, and the
 same publish command cross-builds the Windows exe (the project sets
-EnableWindowsTargeting). From Studio, `scripts/pc-check.sh all && scripts/pc-e2e.sh` builds/tests on ssh
-host `pc` and exercises an isolated, hidden, dry-gamma instance. It does not
-change the installed app, gamma, sign-in registration or tray promotion.
+EnableWindowsTargeting). From Studio, `scripts/build.sh` runs the tests and builds
+`out/ShadowBoost.exe`. Every PC step goes through the factory pc-install runner,
+headless (`scripts/pc-run.sh <body.ps1> <exe>`, never a Windows-side ssh):
+`scripts/pc-e2e.sh` exercises an isolated, hidden, dry-gamma instance and does not
+change the installed app, gamma, sign-in registration or tray promotion;
+`scripts/pc-install.sh` builds, runs the e2e and installs; `scripts/pc-hwcheck.ps1`
+moves the monitor's brightness, contrast and gains from minimum to maximum through
+the installed app, reads each value back, and restores them.
 
 ## Commands
 
