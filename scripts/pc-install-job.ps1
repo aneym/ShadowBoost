@@ -39,6 +39,36 @@ function Snap([string]$name) {
 }
 if ((Get-FileHash $stage -Algorithm SHA256).Hash -ne $Sha) { throw "staged exe sha256 differs from $Sha" }
 Snap 'before'
+function Procs([string]$name) {
+    $rows = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'ShadowBoost*' } | ForEach-Object { "$($_.ProcessId) $($_.Name) $($_.ExecutablePath) $($_.CommandLine)" })
+    $rows | Set-Content (Join-Path $evidence "processes-$name.txt"); Write-Output "processes $name ($($rows.Count)):"; $rows | ForEach-Object { Write-Output "  $_" }
+}
+Procs 'before'
+# Retire the legacy app (cos b-20261011192749): stop it, take it out of every per-user startup path (backups and
+# revert lines in the evidence), and rename its exe so nothing can launch it again. HKLM entries need admin: reported, not touched.
+$revert = Join-Path $evidence 'legacy-revert.txt'
+Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'ShadowBoost*' -and ($_.Name -notlike 'ShadowBoost.exe' -or $_.ExecutablePath -ne $exe) -and $_.ExecutablePath -ne $stage } | ForEach-Object {
+    if ($_.Name -ne 'ShadowBoost.exe' -or $_.ExecutablePath -notlike "$dir*") { Write-Output "stopping legacy $($_.ProcessId) $($_.ExecutablePath)"; Stop-Process -Id $_.ProcessId -Force -ErrorAction Continue }
+}
+foreach ($hive in 'HKCU:', 'HKLM:') { foreach ($sub in 'Software\Microsoft\Windows\CurrentVersion\Run', 'Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run') {
+    $key = Get-Item "$hive\$sub" -ErrorAction SilentlyContinue; if (-not $key) { continue }
+    foreach ($name in $key.GetValueNames()) { $value = [string]$key.GetValue($name)
+        if ($value -match 'ShadowBoost' -and $value -notlike "*$exe*") {
+            if ($hive -eq 'HKCU:') { Add-Content $revert "reg add `"HKCU\$sub`" /v `"$name`" /t REG_SZ /d `"$($value.Replace('"','\"'))`" /f"; Remove-ItemProperty "$hive\$sub" -Name $name; Write-Output "removed HKCU Run $name = $value" }
+            else { Write-Output "NEEDS admin: HKLM Run $name = $value (not touched)" } } } } }
+$startup = @([Environment]::GetFolderPath('Startup'), [Environment]::GetFolderPath('CommonStartup'))
+$shell0 = New-Object -ComObject WScript.Shell
+foreach ($folder in $startup) { Get-ChildItem $folder -Filter '*.lnk' -ErrorAction SilentlyContinue | ForEach-Object {
+    $target = $shell0.CreateShortcut($_.FullName).TargetPath
+    if ($target -match 'ShadowBoost' -and $target -ne $exe) {
+        try { Move-Item $_.FullName (Join-Path $evidence ('startup-' + $_.Name)) ; Add-Content $revert "move `"$(Join-Path $evidence ('startup-' + $_.Name))`" back to `"$($_.FullName)`""; Write-Output "removed startup shortcut $($_.FullName) -> $target" }
+        catch { Write-Output "NEEDS admin: startup shortcut $($_.FullName) -> $target ($($_.Exception.Message))" } } } }
+Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { ($_.Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -match 'ShadowBoost' } | ForEach-Object {
+    $line = "task $($_.TaskPath)$($_.TaskName): $(($_.Actions | ForEach-Object { $_.Execute }) -join ',')"
+    try { Disable-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath -ErrorAction Stop | Out-Null; Add-Content $revert "Enable-ScheduledTask -TaskName '$($_.TaskName)' -TaskPath '$($_.TaskPath)'"; Write-Output "disabled $line" }
+    catch { Write-Output "NEEDS admin: $line ($($_.Exception.Message))" } }
+Get-ChildItem $env:USERPROFILE -Filter 'ShadowBoost.legacy*.exe' -ErrorAction SilentlyContinue | ForEach-Object {
+    Rename-Item $_.FullName ($_.Name + '.retired'); Add-Content $revert "rename `"$($_.FullName).retired`" back to `"$($_.FullName)`""; Write-Output "renamed $($_.FullName) -> .retired" }
 # Stop the running copy through its own --quit (it resets gamma), then make sure no copy is left.
 if (Get-Process ShadowBoost -ErrorAction SilentlyContinue) {
     $q = Start-Process -FilePath $exe -ArgumentList '--quit' -PassThru -WindowStyle Hidden; $q.WaitForExit(10000) | Out-Null
@@ -56,6 +86,7 @@ if (-not $s -or $s.pid -ne $app.Id -or -not $s.warm) { throw 'new app did not wr
 Start-Process -FilePath $exe -ArgumentList @('--night', 'schedule') -Wait
 Start-Sleep -Seconds 3
 Snap 'after'
+Procs 'after'
 $procs = @(Get-Process ShadowBoost -ErrorAction SilentlyContinue)
 $run = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name ShadowBoost -ErrorAction SilentlyContinue).ShadowBoost
 Write-Output "installed sha256 $((Get-FileHash $exe -Algorithm SHA256).Hash); prev kept: $(Test-Path (Join-Path $dir 'ShadowBoost.exe.prev'))"
