@@ -59,6 +59,7 @@ public sealed class Settings
     public TimeOnly DimTo { get; set; } = new(7, 0);
     public int DimPercent { get; set; } = 80;
     public int FadeMinutes { get; set; } = 20;
+    public ArcSettings Arc { get; set; } = new();
 
     private static readonly JsonSerializerOptions JsonOptions = CreateOptions();
 
@@ -145,6 +146,8 @@ public sealed class Settings
         if (!Enum.IsDefined(DimSchedule)) DimSchedule = NightSchedule.Off;
         if (MonitorBrightness.HasValue) MonitorBrightness = Math.Clamp(MonitorBrightness.Value, 0, 100);
         if (BrightnessLevel.HasValue) BrightnessLevel = double.IsFinite(BrightnessLevel.Value) ? Math.Clamp(BrightnessLevel.Value, 0, Level.Max) : null;
+        Arc ??= new();
+        Arc.Normalize();
         Monitors ??= new();
         foreach (var (key, monitor) in Monitors.ToList())
             if (monitor == null) Monitors[key] = new();

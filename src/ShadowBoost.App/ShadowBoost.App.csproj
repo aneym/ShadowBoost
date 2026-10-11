@@ -2,8 +2,8 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType><TargetFramework>net8.0-windows10.0.19041.0</TargetFramework><SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion><EnableWindowsTargeting>true</EnableWindowsTargeting>
     <UseWPF>true</UseWPF><UseWindowsForms>true</UseWindowsForms>
-    <AssemblyName>ShadowBoost</AssemblyName><Nullable>enable</Nullable>
+    <AssemblyName>ShadowBoost</AssemblyName><Nullable>enable</Nullable><AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ImplicitUsings>disable</ImplicitUsings><ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
-  <ItemGroup><ProjectReference Include="../ShadowBoost.Core/ShadowBoost.Core.csproj"/></ItemGroup>
+  <ItemGroup><ProjectReference Include="../ShadowBoost.Core/ShadowBoost.Core.csproj"/><PackageReference Include="Vortice.Direct3D11" Version="3.8.3"/><PackageReference Include="Vortice.DXGI" Version="3.8.3"/></ItemGroup>
 </Project>

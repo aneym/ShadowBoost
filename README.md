@@ -65,6 +65,26 @@ level holds it until the next boundary; Back to schedule clears the hold.
 Settings include sign-in startup.
 The UI and monochrome tray glyph follow Windows light/dark themes live.
 
+## ARC competitive profile
+
+While ARC Raiders (`PioneerGame.exe`, or any name in `arc.processes`) owns the foreground window, ShadowBoost
+switches to the ARC profile and switches back 3 s after the game loses focus or exits:
+
+- The monitor goes to the room-light brightness for the time of day (`arc.roomBrightness`: Day 100, Evening 90,
+  Night 80; there is no ambient light sensor on the LG) and to `arc.contrast` (70). Warmth and dimming pause; the
+  white point is neutral.
+- The gamma ramp follows the scene: every `arc.sampleSeconds` (2 s) the app reads one frame of the game's monitor
+  through DXGI desktop duplication (what OBS and Discord use), takes the mean luma of the centre 70 % (HUD excluded),
+  and blends between the ARC Day, Dusk and Night curves (`arc.day`, `arc.dusk`, `arc.night`; luma 90 and above is day,
+  30 and below is night). An 8 s median, 0.1 steps that must hold for 3 s, and a 1.5 s fade keep muzzle flashes and
+  explosions from moving the look.
+- A manual pick sticks: Ctrl+Alt+F10 cycles Auto, Day, Dusk, Night (also in the tray menu and `--arc auto|day|dusk|night`);
+  the pick holds across scenes and restarts until Auto is picked again. `--arc on|off` turns the profile on or off.
+- Ctrl+Shift+D and Ctrl+Shift+N are released while the game is in front so they never swallow keys mid-fight.
+- Nothing touches the game: the process name comes from the system process list (no handle), pixels come from the
+  desktop, and the controls are the monitor's own DDC/CI and the Windows gamma ramp. In-game values never become the
+  saved desktop settings. `status.json` has an `arc` block (active, luma, darkness, curve, sample errors).
+
 ## Build
 
 Requires .NET 8 SDK. On Windows:

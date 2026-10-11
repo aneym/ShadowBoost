@@ -19,7 +19,17 @@ public partial class App : Application
     internal BoostEngine Engine = null!;
     internal EngineState State => Engine.State(DateTimeOffset.Now);
     // With hardware brightness the one level splits into the monitor's percent and the ramp's brightness.
-    internal Look Look { get { var look = Night.Look(DateTimeOffset.Now, Settings, TimeZoneInfo.Local); return HardwareBrightness ? look with { Brightness = Level.Split(EffectiveLevel(look)).Ramp } : look; } }
+    // While ARC owns the foreground: neutral white point, ramp brightness 100 and the room-proxy monitor brightness (EffectiveLevel).
+    internal Look Look { get { var look = Night.Look(DateTimeOffset.Now, Settings, TimeZoneInfo.Local); if (ArcOn) return look with { Kelvin = Night.NeutralKelvin, Brightness = 100 }; return HardwareBrightness ? look with { Brightness = Level.Split(EffectiveLevel(look)).Ramp } : look; } }
+    // ARC competitive profile state (see ArcWatch and Core/Arc.cs).
+    internal bool ArcOn;
+    string? arcProcess; IntPtr arcWindow; SceneTracker arcScene = new();
+    DateTimeOffset arcLost = DateTimeOffset.MaxValue, arcNextSample, arcSince;
+    double arcLuma = double.NaN; string? arcError; bool arcSampling; int arcSamples;
+    DispatcherTimer? arcTimer;
+    internal double ArcDarkness(DateTimeOffset now) => ArcSettings.PinDarkness(Settings.Arc.Pin) ?? (Settings.Arc.SceneAdaptive ? arcScene.Current(now) : 0.5);
+    internal Curve ArcCurve => Settings.Arc.CurveAt(ArcDarkness(DateTimeOffset.Now));
+    Curve? CurrentCurve => ArcOn ? ArcCurve : State.AppliedCurve;
     internal bool Dry, Isolated, Dark;
     MonitorBus? bus;
     // The last raw value we sent (or adopted) per monitor and VCP code.
@@ -41,7 +51,7 @@ public partial class App : Application
     internal int PresetOf(MonitorInfo m) => Saved(m)?.Preset ?? m.V(0x14)?.Current ?? 0;
     internal int[] NeutralGains(MonitorInfo m) => Saved(m)?.Gains is { Length: 3 } g ? g : new[] { m.V(0x16)?.Current ?? 0, m.V(0x18)?.Current ?? 0, m.V(0x1A)?.Current ?? 0 };
     internal bool ShowGains(MonitorInfo m) => m.HasGains && (!m.Caps.Has(0x14) || Hardware.IsUserPreset(PresetOf(m)));
-    double EffectiveLevel(Look look) => Level.Dim(SavedLevel, Night.DimScale(look.Dimming, Settings));
+    double EffectiveLevel(Look look) => ArcOn ? Level.Below + Settings.Arc.RoomBrightness.GetValueOrDefault(State.Period, 100) : Level.Dim(SavedLevel, Night.DimScale(look.Dimming, Settings));
     internal string BrightnessShown(Look look) => HardwareBrightness ? Level.Label(EffectiveLevel(look)) : $"{Math.Round(look.Brightness)}%";
     string lastSaved = "";
     internal event Action? Changed;
@@ -80,7 +90,7 @@ public partial class App : Application
             catch (Exception ex) { Trace.WriteLine(ex); Environment.ExitCode = 1; }
             Shutdown(); return;
         }
-        string[] commands = { "--on", "--off", "--level", "--schedule", "--show", "--flyout", "--quit", "--screenshot", "--night", "--warmth", "--brightness", "--brightness-level", "--contrast", "--gains", "--preset" };
+        string[] commands = { "--arc", "--on", "--off", "--level", "--schedule", "--show", "--flyout", "--quit", "--screenshot", "--night", "--warmth", "--brightness", "--brightness-level", "--contrast", "--gains", "--preset" };
         if (e.Args.Any(commands.Contains))
         {
             Native.AttachConsole(uint.MaxValue);
@@ -104,9 +114,10 @@ public partial class App : Application
         var look = Look; Push(null, look, true); rampCheck = Dry ? "dry" : expected.IsIdentity ? "identity" : "applied";
         ApplyTheme();
         hotkey = new HwndSource(new HwndSourceParameters(pipeName) { Width = 0, Height = 0, WindowStyle = 0 });
-        hotkey.AddHook((IntPtr hwnd, int msg, IntPtr w, IntPtr l, ref bool handled) => { if (msg == 0x312) { if (w == (IntPtr)2) ToggleWarm(); else Toggle(); handled = true; } return IntPtr.Zero; });
+        hotkey.AddHook((IntPtr hwnd, int msg, IntPtr w, IntPtr l, ref bool handled) => { if (msg == 0x312) { if (w == (IntPtr)3) CycleArc(); else if (w == (IntPtr)2) ToggleWarm(); else Toggle(); handled = true; } return IntPtr.Zero; });
         // Isolated checks must not steal the installed app's hotkeys: Ctrl+Shift+D boost, Ctrl+Shift+N warmth.
-        if (!Isolated && !Dry) { Native.RegisterHotKey(hotkey.Handle, 1, 0x4006, 0x44); Native.RegisterHotKey(hotkey.Handle, 2, 0x4006, 0x4E); }
+        // Ctrl+Alt+F10 cycles the ARC look (Auto, Day, Dusk, Night); it stays registered in game because no game binds it.
+        if (!Isolated && !Dry) { Native.RegisterHotKey(hotkey.Handle, 1, 0x4006, 0x44); Native.RegisterHotKey(hotkey.Handle, 2, 0x4006, 0x4E); Native.RegisterHotKey(hotkey.Handle, 3, 0x4003, 0x79); }
         tray = new Forms.NotifyIcon { Visible = !Isolated };
         tray.MouseClick += (_, a) => Dispatcher.Invoke(() => { if (a.Button == Forms.MouseButtons.Left) ToggleFlyout(); else if (a.Button == Forms.MouseButtons.Right) Menu(); });
         debounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
@@ -117,6 +128,8 @@ public partial class App : Application
         timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(10) };
         timer.Tick += (_, _) => { bool change = Engine.Tick(DateTimeOffset.Now); ExpireHold(); Refresh(change); PinTray(); if (++ticks % 3 == 0) PollMonitors(); };
         timer.Start(); pinDeadline = DateTimeOffset.Now.AddMinutes(2);
+        arcTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        arcTimer.Tick += (_, _) => ArcTick(); arcTimer.Start();
         SyncRun();
         SystemEvents.TimeChanged += TimeChanged;
         SystemEvents.DisplaySettingsChanged += DisplayChanged;
@@ -153,6 +166,15 @@ public partial class App : Application
         if (Enum.TryParse<LevelId>(Value(args, "--level"), true, out var level)) Engine.SetLevel(level, DateTimeOffset.Now);
         if (int.TryParse(Value(args, "--warmth"), out var kelvin)) { Settings.WarmKelvin = kelvin; Settings.Normalize(); Save(); }
         MonitorCommands(args);
+        switch (Value(args, "--arc")?.ToLowerInvariant())
+        {
+            case "on": Settings.Arc.Enabled = true; Save(); break;
+            case "off": Settings.Arc.Enabled = false; Save(); break;
+            case "auto": PinArc(ArcPin.Auto); break;
+            case "day": PinArc(ArcPin.Day); break;
+            case "dusk": PinArc(ArcPin.Dusk); break;
+            case "night": PinArc(ArcPin.Night); break;
+        }
         if (int.TryParse(Value(args, "--brightness"), out var percent)) { if (HardwareBrightness) Settings.BrightnessLevel = Level.Below + Math.Clamp(percent, 0, Level.Span); else Settings.UserBrightness = percent; Settings.Normalize(); Save(); }
         if (double.TryParse(Value(args, "--brightness-level"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var levelValue) && double.IsFinite(levelValue)) { Settings.BrightnessLevel = levelValue; Settings.Normalize(); Save(); }
         switch (Value(args, "--night"))
@@ -194,7 +216,7 @@ public partial class App : Application
     }
     void SaveSettled(object? sender, EventArgs e) { saveDebounce!.Stop(); Save(); }
     // Applies the composed ramp and the monitor brightness without rebuilding views, for slider drags.
-    void Apply() { Push(State.AppliedCurve, Look, false); ApplyHardware(); }
+    void Apply() { Push(CurrentCurve, Look, false); ApplyHardware(); }
     void RefreshBus() => bus?.Refresh(() => Dispatcher.BeginInvoke(() => BusRefreshed()));
     // After every bus refresh: the first time a monitor is seen, adopt its current values as the saved ones (no write, so installing never changes the display); then apply the saved values.
     void BusRefreshed()
@@ -229,7 +251,7 @@ public partial class App : Application
         {
             if (percent >= 0) Send(m, 0x10, Hardware.ToRaw(percent, m.Brightness!.Max), true);
             if (Saved(m) is not { } s) continue;
-            if (s.Contrast is int c && m.Works(0x12)) Send(m, 0x12, Hardware.ToRaw(c, m.V(0x12)!.Max), true);
+            if ((ArcOn && Settings.Arc.Contrast is int ac ? ac : s.Contrast) is int c && m.Works(0x12)) Send(m, 0x12, Hardware.ToRaw(c, m.V(0x12)!.Max), true);
             if (s.Preset is int p && m.Works(0x14)) Send(m, 0x14, p, false);
             if (!GainsActive(m)) continue;
             var neutral = (s.Gains![0], s.Gains[1], s.Gains[2]);
@@ -292,7 +314,8 @@ public partial class App : Application
     }
     void Adopt(string key, byte code, int? sentAtRead, VcpValue v)
     {
-        if (bus == null || quitting || v.Error != null || v.Current is not int now || Find(key) is not { } m) return;
+        // In game the monitor holds the ARC values, which are not the user's desktop settings: never adopt them.
+        if (bus == null || quitting || ArcOn || v.Error != null || v.Current is not int now || Find(key) is not { } m) return;
         if (code == 0x10 ? !HardwareBrightness || v.Max <= 0 : !m.Works(code)) return;
         bool percent = code is 0x10 or 0x12;
         if (!sentRaw.TryGetValue((key, code), out var sent) || sentAtRead != sent || bus.Busy(key) || (percent ? SameRaw(sent, now, v.Max) : sent == now)) return;
@@ -339,8 +362,9 @@ public partial class App : Application
         var state = State; var look = Look;
         // A game or driver may reset ramps; reapply whenever the readback drifts from what we set.
         bool mismatch = !Dry && !Native.Matches(expected);
-        var target = GammaRamp.Compose(state.AppliedCurve, look.Brightness, RampKelvin(look));
-        Push(state.AppliedCurve, look, mismatch || (apply && !target.IsIdentity));
+        var curve = CurrentCurve;
+        var target = GammaRamp.Compose(curve, look.Brightness, RampKelvin(look));
+        Push(curve, look, mismatch || (apply && !target.IsIdentity));
         rampCheck = Dry ? "dry" : !Native.Matches(expected) ? "mismatch" : expected.IsIdentity ? "identity" : AppliedKelvin != RampKelvin(look) ? "limited" : "applied";
         UpdateTray(); Changed?.Invoke(); WriteStatus();
     }
@@ -362,7 +386,10 @@ public partial class App : Application
                 gains = m.Caps.Has(0x16) ? new { neutral = Saved(m)?.Gains, target = GainValues(m, v => v?.Target), current = GainValues(m, v => v?.Current), readback = GainValues(m, v => v?.Readback) } : null,
                 warmth = HardwareWarmth ? "monitor" : "gamma", warmthOnMonitor = GainsActive(m) }).ToList(),
             expectedMid = new[] { expected.Red[128], expected.Green[128], expected.Blue[128] },
-            rampMid = Dry ? null : Native.RampMid(), rampCheck, runKey = RunValue(), trayPinned = PinValue() }, Json);
+            rampMid = Dry ? null : Native.RampMid(), rampCheck,
+            arc = new { enabled = Settings.Arc.Enabled, active = ArcOn, process = arcProcess, since = ArcOn ? arcSince : (DateTimeOffset?)null, pin = Settings.Arc.Pin, sceneAdaptive = Settings.Arc.SceneAdaptive,
+                luma = double.IsFinite(arcLuma) ? Math.Round(arcLuma, 1) : (double?)null, samples = arcSamples, sampleError = arcError, darkness = Math.Round(ArcDarkness(DateTimeOffset.Now), 2), target = arcScene.Target,
+                curve = ArcOn ? ArcCurve : null, roomBrightness = ArcOn ? Settings.Arc.RoomBrightness.GetValueOrDefault(state.Period, 100) : (int?)null }, runKey = RunValue(), trayPinned = PinValue() }, Json);
         // A reader holding status.json open (a check, an editor, antivirus) makes the replace fail; retry briefly, never crash.
         for (int attempt = 0; ; attempt++)
         {
@@ -405,7 +432,7 @@ public partial class App : Application
         string warm = look.Warmth.On ? $"Warm {look.Kelvin} K" : "Daylight";
         string boost = s.Enabled ? $", boost {s.ActiveLevel}" : "";
         // NotifyIcon text is limited to 127 characters.
-        var text = $"ShadowBoost: {warm}{boost}, brightness {BrightnessShown(look)}"; tray.Text = text.Length > 127 ? text[..127] : text;
+        var text = ArcOn ? $"ShadowBoost: ARC {ArcLabel}, brightness {BrightnessShown(look)}" : $"ShadowBoost: {warm}{boost}, brightness {BrightnessShown(look)}"; tray.Text = text.Length > 127 ? text[..127] : text;
     }
     void Menu()
     {
@@ -415,7 +442,54 @@ public partial class App : Application
         Item("Open ShadowBoost", ShowMain); menu.Items.Add(new Separator());
         Item(warm.On ? $"Warm until {UI.Clock(warm.NextChange)}" : "Warm now", ToggleWarm, warm.On);
         Item("Shadow boost", Toggle, State.Enabled); menu.Items.Add(new Separator());
+        Item(ArcOn ? $"ARC profile: {ArcLabel}" : "ARC profile", () => { Settings.Arc.Enabled = !Settings.Arc.Enabled; Save(); }, Settings.Arc.Enabled);
+        foreach (var pin in Enum.GetValues<ArcPin>()) { var p = pin; Item(p == ArcPin.Auto ? "ARC look: Auto (follows the scene)" : $"ARC look: {p}", () => PinArc(p), Settings.Arc.Pin == p); }
+        menu.Items.Add(new Separator());
         Item("Quit ShadowBoost", Quit); menu.IsOpen = true;
+    }
+    internal string ArcLabel => Settings.Arc.Pin == ArcPin.Auto ? $"Auto {ArcDarkness(DateTimeOffset.Now):0.0}" : $"{Settings.Arc.Pin} (pinned)";
+    internal void PinArc(ArcPin pin) { Settings.Arc.Pin = pin; Save(); }
+    void CycleArc() => PinArc((ArcPin)(((int)Settings.Arc.Pin + 1) % 4));
+    // Every 250 ms: is the game in front? Enter when it is, leave 3 s after it is not; sample the scene every SampleSeconds and fade the ramp.
+    void ArcTick()
+    {
+        if (quitting) return;
+        var now = DateTimeOffset.Now;
+        var front = Settings.Arc.Enabled ? ArcWatch.Foreground(Settings.Arc.Processes) : null;
+        if (front is { } f) { arcLost = DateTimeOffset.MaxValue; arcWindow = f.Window; arcProcess = f.Process; if (!ArcOn) EnterArc(now); }
+        else if (ArcOn)
+        {
+            if (arcLost == DateTimeOffset.MaxValue) arcLost = now;
+            if (!Settings.Arc.Enabled || now - arcLost >= TimeSpan.FromSeconds(3)) { LeaveArc(); return; }
+        }
+        if (!ArcOn) return;
+        if (front != null && Settings.Arc.Pin == ArcPin.Auto && Settings.Arc.SceneAdaptive && !arcSampling && now >= arcNextSample)
+        {
+            arcSampling = true; arcNextSample = now.AddSeconds(Settings.Arc.SampleSeconds); var window = arcWindow;
+            Task.Run(() => ArcWatch.Sample(window)).ContinueWith(t => Dispatcher.BeginInvoke(() =>
+            {
+                arcSampling = false;
+                var (luma, error) = t.IsCompletedSuccessfully ? t.Result : (double.NaN, t.Exception?.GetBaseException().Message);
+                arcLuma = luma; arcError = error;
+                if (double.IsFinite(luma)) { arcSamples++; arcScene.Add(DateTimeOffset.Now, Settings.Arc.Darkness(luma)); }
+                if (ArcOn) { UpdateTray(); WriteStatus(); }
+            }));
+        }
+        Push(ArcCurve, Look, false);
+    }
+    void EnterArc(DateTimeOffset now)
+    {
+        ArcOn = true; arcSince = now; arcSamples = 0; arcLuma = double.NaN; arcError = null; arcNextSample = now;
+        arcScene = new SceneTracker(ArcSettings.PinDarkness(Settings.Arc.Pin) ?? 0.5);
+        // Ctrl+Shift+D and Ctrl+Shift+N would swallow D and N while crouch-sprinting; release them in game.
+        if (hotkey != null && !Isolated && !Dry) { Native.UnregisterHotKey(hotkey.Handle, 1); Native.UnregisterHotKey(hotkey.Handle, 2); }
+        Refresh(true);
+    }
+    void LeaveArc()
+    {
+        ArcOn = false; arcLost = DateTimeOffset.MaxValue; ArcWatch.Reset();
+        if (hotkey != null && !Isolated && !Dry) { Native.RegisterHotKey(hotkey.Handle, 1, 0x4006, 0x44); Native.RegisterHotKey(hotkey.Handle, 2, 0x4006, 0x4E); }
+        Refresh(true);
     }
     internal void ShowMain()
     {
@@ -470,7 +544,8 @@ public partial class App : Application
         quitting = true; timer?.Stop(); stopping.Cancel(); watcher?.Dispose(); debounce?.Stop();
         RestoreNeutralGains(); Native.Apply(Neutral, Dry);
         Engine.TurnOff(DateTimeOffset.Now); rampCheck = Dry ? "dry" : "identity"; WriteStatus();
-        if (hotkey != null) { if (!Isolated && !Dry) { Native.UnregisterHotKey(hotkey.Handle, 1); Native.UnregisterHotKey(hotkey.Handle, 2); } hotkey.Dispose(); }
+        arcTimer?.Stop();
+        if (hotkey != null) { if (!Isolated && !Dry) { Native.UnregisterHotKey(hotkey.Handle, 1); Native.UnregisterHotKey(hotkey.Handle, 2); Native.UnregisterHotKey(hotkey.Handle, 3); } hotkey.Dispose(); }
         tray?.Dispose(); trayImage?.Dispose(); bus?.Dispose();
         SystemEvents.TimeChanged -= TimeChanged; SystemEvents.DisplaySettingsChanged -= DisplayChanged; SystemEvents.PowerModeChanged -= PowerChanged; SystemEvents.UserPreferenceChanged -= ThemeChanged; SystemEvents.SessionEnding -= OnSessionEnding;
         mutex?.ReleaseMutex(); mutex?.Dispose(); Shutdown();
